@@ -4,6 +4,7 @@ import { NvidiaProvider } from './providers/nvidia.js';
 import { LocalProvider } from './providers/local.js';
 import { ProviderError } from './providers/base.js';
 import { MODEL_PRICING, TASK_FEATURE_MAP } from './catalog.js';
+import config from '../../config/index.js';
 import { tooMany } from '../../utils/errors.js';
 import { round } from '../../utils/validation.js';
 
@@ -297,9 +298,17 @@ export async function runJsonTask(
     }
   }
 
-  // Hard failure: if the remote provider is down but simulation is allowed,
-  // fall back to the local deterministic analyser so learning is not blocked.
-  if (runtime.hasApiKey) {
+  // Hard failure: fall back to the local deterministic analyser so learning is
+  // not blocked.
+  //
+  // This used to be gated on `runtime.hasApiKey`, which meant a deployment with
+  // NO key at all — the default state of the demo, and of this project on Vercel
+  // — threw instead of falling back. Every AI-backed flow that needs JSON
+  // (assessment generation, exercise authoring, gap analysis) returned 400 the
+  // moment there was no key, while the chat path looked fine because it has its
+  // own local provider. The fallback is exactly what the no-key case needs, so
+  // the guard is gone; `allowSimulation` is the real switch.
+  if (config.ai.allowSimulation) {
     try {
       const local = new LocalProvider();
       const res = await local.chat({ model: models[0] || route?.model || 'local', messages, meta: { ...meta, task: meta.task || task } });
