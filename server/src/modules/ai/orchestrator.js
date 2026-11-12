@@ -29,11 +29,22 @@ const RATE_LIMIT = { windowMs: 60_000, max: 60 };
 
 let providerCache = { key: '', provider: null };
 
-function getProvider(runtime) {
-  const key = `${runtime.baseUrl}|${runtime.apiKey}`;
+export function getProvider(runtime) {
+  // The cache key must include which models carry their own credentials,
+  // otherwise editing one model's key would keep serving the stale provider.
+  const modelSignature = Object.entries(runtime.models || {})
+    .map(([id, m]) => `${id}:${m.apiKeyCipher ? 'k' : '-'}:${m.endpointBaseUrl || ''}:${m.endpointPath || ''}`)
+    .join('|');
+  const key = `${runtime.baseUrl}|${runtime.apiKey}|${modelSignature}`;
   if (providerCache.key === key && providerCache.provider) return providerCache.provider;
   const provider = runtime.hasApiKey
-    ? new NvidiaProvider({ apiKey: runtime.apiKey, baseUrl: runtime.baseUrl, timeoutMs: runtime.timeoutMs })
+    ? new NvidiaProvider({
+        apiKey: runtime.apiKey,
+        baseUrl: runtime.baseUrl,
+        timeoutMs: runtime.timeoutMs,
+        models: runtime.models || {},
+        runtime,
+      })
     : new LocalProvider();
   providerCache = { key, provider };
   return provider;

@@ -144,7 +144,7 @@ export function useToast() {
 }
 
 /* ------------------------------------------------------------------ Modal */
-export function Modal({ open, onClose, title, description, children, footer, width = 'max-w-lg' }) {
+export function Modal({ open, onClose, title, description, children, footer, width = 'max-w-lg', bare = false }) {
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (e) => e.key === 'Escape' && onClose?.();
@@ -160,12 +160,22 @@ export function Modal({ open, onClose, title, description, children, footer, wid
   return createPortal(
     <div className="fixed inset-0 z-[90] flex items-end justify-center bg-slate-900/50 p-0 backdrop-blur-[2px] sm:items-center sm:p-4" onMouseDown={onClose}>
       <div
-        className={cx('w-full rounded-t-2xl bg-white shadow-pop dark:bg-slate-900 sm:rounded-2xl', width)}
+        className={cx('w-full bg-white shadow-pop dark:bg-slate-900 sm:rounded-2xl', bare ? 'rounded-t-2xl' : 'rounded-t-2xl', width)}
         onMouseDown={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
-        aria-label={title}
+        aria-label={title || 'Dialog'}
       >
+        {bare ? (
+          // Bare variant: the content owns its layout and supplies a close button.
+          <div className="relative max-h-[88vh] overflow-y-auto px-4 py-4 sm:px-6">
+            <button onClick={onClose} className="btn-ghost absolute right-3 top-3 z-10 p-1.5" aria-label="Close">
+              <X className="h-4 w-4" />
+            </button>
+            {children}
+          </div>
+        ) : (
+          <>
         <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4 dark:border-slate-800">
           <div>
             <h3 className="text-base font-semibold text-slate-900 dark:text-white">{title}</h3>
@@ -177,6 +187,8 @@ export function Modal({ open, onClose, title, description, children, footer, wid
         </div>
         <div className="max-h-[70vh] overflow-y-auto px-5 py-4">{children}</div>
         {footer ? <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-3.5 dark:border-slate-800">{footer}</div> : null}
+          </>
+        )}
       </div>
     </div>,
     document.body,

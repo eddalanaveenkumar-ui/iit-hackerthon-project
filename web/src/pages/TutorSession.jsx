@@ -17,6 +17,7 @@ import {
 import ReactMarkdown from 'react-markdown';
 import { api } from '../lib/api';
 import { Badge, ErrorBanner, LoadingBlock, Spinner, cx, useToast } from '../components/ui';
+import { VisualBlocks, VisualHint } from '../components/visuals';
 import { categoryStyles, levelStyles, timeAgo } from '../lib/format';
 
 export default function TutorSession() {
@@ -318,6 +319,7 @@ function Row({ label, value }) {
 
 function MessageBubble({ message }) {
   const isUser = message.role === 'user';
+  const [visualsOpen, setVisualsOpen] = useState(true);
   if (isUser) {
     return (
       <div className="flex justify-end">
@@ -337,6 +339,12 @@ function MessageBubble({ message }) {
         <div className="prose-tutor max-w-none text-sm text-slate-700 dark:text-slate-200">
           <ReactMarkdown>{message.content}</ReactMarkdown>
         </div>
+        {meta.visuals?.length ? (
+          <>
+            <VisualHint count={meta.visuals.length} open={visualsOpen} onToggle={() => setVisualsOpen((v) => !v)} />
+            {visualsOpen ? <VisualBlocks blocks={meta.visuals} /> : null}
+          </>
+        ) : null}
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
           {meta.scaffoldingLevel ? <Badge tone={meta.scaffoldingLevel === 'independent' ? 'success' : meta.scaffoldingLevel === 'guided' ? 'warning' : 'brand'}>{meta.scaffoldingLevel}</Badge> : null}
           {meta.difficultyShift && meta.difficultyShift !== 'steady' ? <Badge tone={meta.difficultyShift === 'harder' ? 'violet' : 'neutral'}>{meta.difficultyShift}</Badge> : null}

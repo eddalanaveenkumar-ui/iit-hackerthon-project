@@ -12,6 +12,7 @@ import { prompts } from '../ai/prompts.js';
 import { getOrCreateProfile, refreshProfileAggregates, applyMasteryEvidence, getTopicMastery } from '../intelligence/profile.js';
 import { analyseInteraction, getOpenGaps } from '../intelligence/gap-engine.js';
 import { retrieveContext, buildSyllabusContext } from './retrieval.js';
+import { normaliseVisuals, buildFallbackVisuals } from './visuals.js';
 
 const router = Router();
 
@@ -517,6 +518,22 @@ router.post(
         ? { recommend: true, kind: 'topic_quiz', reason: gapResult.recommendReason || 'Repeated difficulty on this concept' }
         : { recommend: false };
 
+    // ---- Visual explanation ------------------------------------------------
+    // Prefer the model's own diagram (it knows what it just explained). If it
+    // returned nothing usable, derive one from the syllabus so a lesson is
+    // never left with prose only.
+    let visuals = normaliseVisuals(tutorData?.visuals);
+    let visualsSource = visuals.length ? 'model' : 'syllabus';
+    if (!visuals.length) {
+      visuals = buildFallbackVisuals({
+        concept,
+        subtopics,
+        chunks: retrieved.chunks,
+        mode: session.mode,
+      });
+      visualsSource = 'generated';
+    }
+
     const assistantMessage = {
       sessionId: session._id,
       userId: req.userId,
@@ -526,6 +543,8 @@ router.post(
       content: reply,
       meta: {
         kind: 'tutor',
+        visuals,
+        visualsSource,
         scaffoldingLevel,
         hints: tutorData?.hints || [],
         citations: tutorData?.citations || [],

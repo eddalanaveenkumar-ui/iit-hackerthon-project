@@ -37,15 +37,37 @@ export function invalidateAiCache() {
   cache = null;
 }
 
+/**
+ * Model documents keyed by modelId, with each model's own credentials
+ * decrypted. Passed to the provider so a model can use its own endpoint, key
+ * and path instead of the global NVIDIA configuration.
+ */
+export function modelsById(bundle) {
+  const out = {};
+  for (const model of bundle.models || []) {
+    out[model.modelId] = {
+      ...model,
+      apiKeyCipher: model.apiKeyCipher ? decryptSecret(model.apiKeyCipher) : '',
+    };
+  }
+  return out;
+}
+
 export async function getRuntimeConfig() {
   const bundle = await getConfigBundle();
   const cfg = bundle.config || {};
   const apiKey = decryptSecret(cfg.apiKeyCipher) || config.ai.nvidiaApiKey || '';
+  const models = modelsById(bundle);
+  // A model with its own key counts as "configured" even when the global key is
+  // empty — that is the whole point of per-model credentials.
+  const anyModelKey = Object.values(models).some((m) => m.apiKeyCipher);
   return {
     provider: cfg.provider || 'nvidia',
     baseUrl: cfg.baseUrl || config.ai.nvidiaBaseUrl,
     apiKey,
-    hasApiKey: Boolean(apiKey),
+    models,
+    hasApiKey: Boolean(apiKey) || anyModelKey,
+    modelKeyCount: Object.values(models).filter((m) => m.apiKeyCipher).length,
     timeoutMs: cfg.timeoutMs ?? config.ai.requestTimeoutMs,
     maxRetries: cfg.maxRetries ?? config.ai.maxRetries,
     generation: {

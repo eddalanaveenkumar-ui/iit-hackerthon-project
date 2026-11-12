@@ -17,8 +17,10 @@ import {
   providerHealth,
   usageAnalytics,
   clearAiCache,
+  getProvider,
 } from './orchestrator.js';
 import { AI_TASKS, FEATURE_DEFINITIONS } from './catalog.js';
+import { validateBaseUrl, normalisePath, defaultPathFor, resolveEndpoint } from './endpoints.js';
 
 const router = Router();
 
@@ -144,13 +146,32 @@ router.post(
   }),
 );
 
+/**
+ * Model IDs are namespaced (`nvidia/nemotron-…`, `qwen/qwen2.5-…`), so the route
+ * must accept slashes. Express 5 ships path-to-regexp v8, which removed inline
+ * regex parameters and array captures; a wildcard returns an array of segments,
+ * which `modelIdFrom` joins back into the real ID.
+ */
+const MODEL_PATH = '*modelId';
+const modelIdFrom = (req) => {
+  const raw = req.params.modelId;
+  return Array.isArray(raw) ? raw.join('/') : String(raw || '');
+};
+
 router.patch(
-  '/admin/models/:modelId',
+  `/admin/models/${MODEL_PATH}`,
   asyncHandler(async (req, res) => {
     const data = validate(
       z.object({
         enabled: z.boolean().optional(),
         displayName: z.string().min(2).max(120).optional(),
+        // Per-model endpoint. Every NIM model family has its own route, and a
+        // model may be self-hosted, so each model is configurable on its own.
+        endpointBaseUrl: z.string().max(300).nullable().optional(),
+        endpointPath: z.string().max(120).nullable().optional(),
+        apiKey: z.string().min(8).max(400).optional(),
+        clearApiKey: z.boolean().optional(),
+        payloadStyle: z.enum(['openai', 'nemo-rerank']).nullable().optional(),
         params: z
           .object({
             temperature: z.number().min(0).max(2).optional(),
@@ -163,16 +184,155 @@ router.patch(
       req.body,
     );
     const db = getDb();
-    const modelDoc = await db.collection('ai_models').findOne({ modelId: req.params.modelId });
+    const targetModelId = modelIdFrom(req);
+    const modelDoc = await db.collection('ai_models').findOne({ modelId: targetModelId });
     if (!modelDoc) throw notFound('Model not registered');
     const update = { updatedAt: new Date() };
+
     if (data.enabled !== undefined) update.enabled = data.enabled;
     if (data.displayName) update.displayName = data.displayName;
     if (data.params) update.params = { ...(modelDoc.params || {}), ...data.params };
+
+    if (data.endpointBaseUrl !== undefined) {
+      update.endpointBaseUrl = data.endpointBaseUrl ? validateBaseUrl(data.endpointBaseUrl) : '';
+    }
+    if (data.endpointPath !== undefined) {
+      update.endpointPath = data.endpointPath ? normalisePath(data.endpointPath) : '';
+    }
+    if (data.payloadStyle !== undefined) update.payloadStyle = data.payloadStyle || '';
+    if (data.clearApiKey) {
+      update.apiKeyCipher = '';
+      update.apiKeyPreview = '';
+    } else if (data.apiKey) {
+      update.apiKeyCipher = encryptSecret(data.apiKey);
+      update.apiKeyPreview = maskSecret(data.apiKey);
+    }
+
     await db.collection('ai_models').updateOne({ _id: modelDoc._id }, { $set: update });
     invalidateAiCache();
-    await logAudit({ actorId: req.userId, action: 'ai.model_updated', target: modelDoc.modelId, meta: data, ip: req.ip });
-    res.json({ ok: true });
+    await logAudit({
+      actorId: req.userId,
+      action: 'ai.model_updated',
+      target: modelDoc.modelId,
+      meta: {
+        ...data,
+        apiKey: data.apiKey ? 'changed' : undefined,
+        endpointBaseUrl: update.endpointBaseUrl,
+        endpointPath: update.endpointPath,
+      },
+      ip: req.ip,
+    });
+    res.json({ ok: true, message: 'Model settings saved. Changes are live without restart.' });
+  }),
+);
+
+/**
+ * The exact URL each model will be called on. Resolved server-side so the admin
+ * panel never has to guess, and so a misrouted model (chat model on the rerank
+ * path, say) is visible before it fails in a lesson.
+ */
+router.get(
+  '/admin/models/endpoints',
+  asyncHandler(async (req, res) => {
+    const runtime = await getRuntimeConfig();
+    const bundle = await getConfigBundle(true);
+    res.json({
+      provider: runtime.provider,
+      baseUrl: runtime.baseUrl,
+      globalKeyConfigured: Boolean(runtime.apiKey),
+      modelsConfigured: runtime.modelKeyCount || 0,
+      // Resolved straight from the model documents rather than from the active
+      // provider: where a model *would* be called is a property of the model,
+      // not of whether a key happens to be configured right now.
+      endpoints: bundle.models.map((model) => {
+        const ep = resolveEndpoint(runtime, model);
+        return {
+          modelId: model.modelId,
+          displayName: model.displayName,
+          category: ep.category,
+          method: ep.method,
+          baseUrl: ep.baseUrl,
+          path: ep.path,
+          url: ep.url,
+          apiKeySource: ep.apiKeySource,
+          hasOwnCredentials: ep.hasOwnCredentials,
+          configured: ep.apiKeySource !== 'none',
+          enabled: model.enabled,
+          availability: model.availability || 'unknown',
+          apiKeyPreview: model.apiKeyPreview || '',
+          overridesGlobal: Boolean(model.endpointBaseUrl || model.apiKeyCipher),
+        };
+      }),
+    });
+  }),
+);
+
+router.post(
+  '/admin/models/endpoints/test',
+  asyncHandler(async (req, res) => {
+    const data = validate(z.object({ modelId: z.string().min(3).max(160) }), req.body);
+    const runtime = await getRuntimeConfig();
+    const provider = getProvider(runtime);
+    const bundle = await getConfigBundle(true);
+    const model = bundle.models.find((m) => m.modelId === data.modelId);
+    if (!model) throw notFound('Model not registered');
+
+    const ep = resolveEndpoint(runtime, model);
+    if (!ep.apiKey) {
+      return res.status(400).json({
+        ok: false,
+        modelId: model.modelId,
+        endpoint: ep.url,
+        detail:
+          'No API key for this model and no global key configured, so the endpoint cannot be tested. The model currently runs on the local analyser.',
+      });
+    }
+
+    const started = Date.now();
+    try {
+      if (model.category === 'embedding') {
+        const out = await provider.embed({ model: model.modelId, input: ['endpoint check'] });
+        return res.json({
+          ok: out.vectors.length > 0,
+          modelId: model.modelId,
+          latencyMs: Date.now() - started,
+          endpoint: out.endpoint,
+          dimensions: out.vectors[0]?.length || 0,
+          detail: out.vectors.length ? 'Embedding endpoint responded' : 'Endpoint responded with no vectors',
+        });
+      }
+      if (model.category === 'rerank') {
+        const out = await provider.rerank({ model: model.modelId, query: 'check', documents: ['a', 'b'] });
+        return res.json({
+          ok: out.results.length > 0,
+          modelId: model.modelId,
+          latencyMs: Date.now() - started,
+          endpoint: out.endpoint,
+          detail: 'Rerank endpoint responded',
+        });
+      }
+      const out = await provider.chat({
+        model: model.modelId,
+        messages: [{ role: 'user', content: 'Reply with the single word OK.' }],
+        maxTokens: 16,
+        temperature: 0,
+      });
+      return res.json({
+        ok: Boolean(out.text),
+        modelId: model.modelId,
+        latencyMs: Date.now() - started,
+        endpoint: out.endpoint,
+        sample: String(out.text).slice(0, 80),
+        detail: 'Chat endpoint responded',
+      });
+    } catch (err) {
+      return res.status(err.status || 502).json({
+        ok: false,
+        modelId: model.modelId,
+        endpoint: ep.url,
+        detail: err.message,
+      });
+    }
   }),
 );
 
