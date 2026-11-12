@@ -1,4 +1,5 @@
 import JSZip from 'jszip';
+import { openPdf } from './pdf-engine.js';
 import mammoth from 'mammoth';
 
 /**
@@ -58,15 +59,28 @@ async function extractPptx(buffer) {
 }
 
 async function extractPdf(buffer) {
-  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-  const data = new Uint8Array(buffer);
-  const doc = await pdfjs.getDocument({
-    data,
-    useSystemFonts: false,
-    isEvalSupported: false,
-    disableFontFace: true,
-    standardFontDataUrl: undefined,
-  }).promise;
+  // The worker is loaded through pdf-engine.js, which imports it statically so
+  // the serverless bundler traces it. Importing pdfjs here directly leaves the
+  // worker as a runtime string and it is missing in production.
+  let doc;
+  try {
+    doc = await openPdf(buffer);
+  } catch (err) {
+    const message = String(err?.message || err);
+    // A malformed upload is the user's problem; a missing engine is ours, and
+    // saying so stops a broken deployment being reported as a broken PDF.
+    if (/worker|Cannot find module|No "GlobalWorkerOptions/i.test(message)) {
+      throw new Error(
+        'The PDF engine could not start on the server. This is a deployment problem, not a problem with your file — please report it.',
+      );
+    }
+    if (/Invalid PDF|structure|corrupt|password/i.test(message)) {
+      throw new Error(
+        'This file is not a readable PDF (it may be corrupted, incomplete or password-protected). Try re-exporting it, or upload a DOCX/PPTX instead.',
+      );
+    }
+    throw err;
+  }
   const pages = [];
   const maxPages = Math.min(doc.numPages, 120);
   for (let p = 1; p <= maxPages; p += 1) {

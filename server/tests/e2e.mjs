@@ -499,6 +499,53 @@ async function main() {
   });
   ok([400].includes(badUpload.status), 'unreadable document is rejected with a clear error');
 
+  // PDF upload parse. This failed in production with "Setting up fake worker
+  // failed: Cannot find module .../pdf.worker.mjs" while passing locally,
+  // because the worker is loaded by pdfjs through a runtime path the bundler
+  // cannot see. The fix imports it statically (see syllabus/pdf-engine.js); this
+  // asserts a real PDF still parses so a regression is caught before deploying.
+  const pdfBuf = makePdf([
+    'Unit 1 Python Fundamentals 1.1 Variables and Data Types 1.2 Operators 1.3 Input and Output',
+    'Unit 2 Control Flow 2.1 Conditional Statements 2.2 Loops for and while 2.3 Break and Continue',
+    'Unit 3 Data Structures 3.1 Lists and Tuples 3.2 Dictionaries and Sets 3.3 List Comprehensions',
+  ]);
+  const pdfForm = new FormData();
+  pdfForm.append('files', new Blob([pdfBuf], { type: 'application/pdf' }), 'LearnMate_AI_Python_Full_Tutorial_Syllabus.pdf');
+  pdfForm.append('subject', 'Python');
+  pdfForm.append('preview', 'true');
+  const pdfUpload = await api(`/api/syllabus/${state.dsClass.id}/upload`, {
+    method: 'POST',
+    token: naveen.token,
+    body: pdfForm,
+  });
+  ok(pdfUpload.status === 200 && pdfUpload.body.preview === true, 'PDF upload extracts text and previews a parsed structure');
+  ok(pdfUpload.body.files?.[0]?.pages === 3, `PDF page count is reported (${pdfUpload.body.files?.[0]?.pages})`);
+  ok(pdfUpload.body.files?.[0]?.words > 0, 'PDF words are counted');
+  ok(
+    pdfUpload.body.syllabus?.units?.length >= 3,
+    `PDF text is parsed into units (${pdfUpload.body.syllabus?.units?.length})`,
+  );
+  ok(
+    JSON.stringify(pdfUpload.body).includes('Requirements') ||
+      JSON.stringify(pdfUpload.body).includes('Variables') ||
+      JSON.stringify(pdfUpload.body).includes('Data Types'),
+    'the extracted PDF text is actually the document content, not a placeholder',
+  );
+
+  // A corrupt PDF must fail with a message about the file, never about the engine.
+  const brokenPdfForm = new FormData();
+  brokenPdfForm.append('files', new Blob([Buffer.from('%PDF-1.4\nnot actually a pdf')], { type: 'application/pdf' }), 'broken.pdf');
+  const brokenPdf = await api(`/api/syllabus/${state.dsClass.id}/upload`, {
+    method: 'POST',
+    token: naveen.token,
+    body: brokenPdfForm,
+  });
+  ok(brokenPdf.status === 400, 'a corrupt PDF is rejected');
+  ok(
+    !/fake worker|Cannot find module|GlobalWorkerOptions/i.test(JSON.stringify(brokenPdf.body)),
+    'a corrupt PDF is not misreported as a missing PDF engine',
+  );
+
   section('15. AI configuration (admin) — without restart');
   const staffDenied = await api('/api/ai/admin/overview', { token: naveen.token });
   ok(staffDenied.status === 403, 'non-admin cannot read global AI provider settings');
@@ -858,6 +905,51 @@ async function main() {
     failures.forEach((f) => console.log(` - ${f}`));
     process.exitCode = 1;
   }
+}
+
+/**
+ * Build a small, valid text PDF using base-14 Helvetica.
+ *
+ * Real uploads are PDFs far more often than DOCX, and the PDF path is the one
+ * that broke in production (the pdfjs worker was missing from the serverless
+ * bundle while every local test passed). Generating one here keeps that path
+ * covered without committing a binary fixture.
+ */
+function makePdf(pages) {
+  const objs = [];
+  objs[1] = '<< /Type /Catalog /Pages 2 0 R >>';
+  const pageObjs = [];
+  const contentObjs = [];
+  let idx = 3;
+  for (let i = 0; i < pages.length; i += 1) {
+    pageObjs.push(idx);
+    idx += 1;
+    contentObjs.push(idx);
+    idx += 1;
+  }
+  objs[2] = `<< /Type /Pages /Kids [${pageObjs.map((o) => `${o} 0 R`).join(' ')}] /Count ${pages.length} >>`;
+  const fontObj = idx;
+  objs[fontObj] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>';
+  pages.forEach((text, i) => {
+    const stream = `BT /F1 12 Tf 72 720 Td (${String(text).replace(/[()\\]/g, '')}) Tj ET`;
+    objs[contentObjs[i]] = `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`;
+    objs[pageObjs[i]] =
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents ${contentObjs[i]} 0 R ` +
+      `/Resources << /Font << /F1 ${fontObj} 0 R >> >> >>`;
+  });
+  let out = '%PDF-1.4\n';
+  const offsets = [];
+  for (let i = 1; i < objs.length; i += 1) {
+    offsets[i] = out.length;
+    out += `${i} 0 obj\n${objs[i]}\nendobj\n`;
+  }
+  const xref = out.length;
+  out += `xref\n0 ${objs.length}\n0000000000 65535 f \n`;
+  for (let i = 1; i < objs.length; i += 1) {
+    out += `${String(offsets[i]).padStart(10, '0')} 00000 n \n`;
+  }
+  out += `trailer\n<< /Size ${objs.length} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  return Buffer.from(out, 'latin1');
 }
 
 async function makeDocx(paragraphs) {
