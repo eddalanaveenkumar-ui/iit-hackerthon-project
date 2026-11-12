@@ -73,6 +73,34 @@ jobs:
           [ "$code" = "200" ] || { echo "::error::authenticated request failed"; exit 1; }
 
       - name: Full contract suite against the live API
+        id: contract
         env:
           BASE: ${{ inputs.base_url || 'https://web-livid-nu-76.vercel.app' }}
-        run: node server/tests/smoke-web.mjs
+        # tee so the result survives the step: when this fails, the only trace
+        # used to be the raw log, which is not always reachable. The summary
+        # below names the failing checks, so the failure is diagnosable from the
+        # run page alone.
+        run: |
+          set -o pipefail
+          node server/tests/smoke-web.mjs 2>&1 | tee /tmp/contract.log
+
+      - name: Summarise results
+        if: always()
+        run: |
+          {
+            echo "## Live contract suite"
+            echo ""
+            if [ -f /tmp/contract.log ]; then
+              tail -n 1 /tmp/contract.log
+              echo ""
+              # Every failing check, verbatim, so no log download is needed.
+              failing=$(grep -A 200 '^Failures:' /tmp/contract.log | grep '^  •' || true)
+              if [ -n "$failing" ]; then
+                echo "### Failing checks"
+                echo ""
+                echo "$failing"
+              fi
+            else
+              echo "The suite did not run."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
