@@ -701,6 +701,86 @@ router.get(
   }),
 );
 
+/**
+ * Chat history for the sidebar.
+ *
+ * One fresh session is started per /start selection and old ones are never
+ * deleted, so this is the learner's actual conversation archive. Scoped to the
+ * caller: a session belongs to exactly one learner, and privacy settings affect
+ * whether *teachers* can read the transcript — never whether the author can.
+ */
+router.get(
+  '/sessions',
+  asyncHandler(async (req, res) => {
+    const data = validate(
+      z.object({
+        classroomId: z.string().optional(),
+        limit: z.coerce.number().int().min(1).max(100).default(30),
+        before: z.string().optional(),
+      }),
+      req.query,
+    );
+    const db = getDb();
+    const filter = { userId: req.userId };
+    if (data.classroomId) filter.classroomId = toOid(data.classroomId);
+    // Keyset pagination on startedAt — the index is (userId, classroomId, startedAt).
+    if (data.before) filter.startedAt = { $lt: new Date(data.before) };
+
+    const sessions = await db
+      .collection('learning_sessions')
+      .find(filter)
+      .sort({ startedAt: -1 })
+      .limit(data.limit)
+      .toArray();
+
+    // Resolve names in two batched lookups rather than per row.
+    const conceptIds = [...new Set(sessions.map((s) => s.conceptId).filter(Boolean).map(String))];
+    const classroomIds = [...new Set(sessions.map((s) => s.classroomId).filter(Boolean).map(String))];
+    const [concepts, classrooms] = await Promise.all([
+      conceptIds.length ? db.collection('syllabus_units').find({ _id: { $in: conceptIds.map(toOid) } }).toArray() : [],
+      classroomIds.length ? db.collection('classrooms').find({ _id: { $in: classroomIds.map(toOid) } }).toArray() : [],
+    ]);
+    const conceptById = Object.fromEntries(concepts.map((c) => [String(c._id), c]));
+    const classroomById = Object.fromEntries(classrooms.map((c) => [String(c._id), c]));
+
+    // A preview line makes the list scannable without opening each thread.
+    const ids = sessions.map((s) => s._id);
+    const previews = ids.length
+      ? await db
+          .collection('chat_messages')
+          .find({ sessionId: { $in: ids }, role: 'assistant' })
+          .sort({ createdAt: 1 })
+          .toArray()
+      : [];
+    const previewBySession = {};
+    for (const m of previews) {
+      const key = String(m.sessionId);
+      if (!previewBySession[key]) previewBySession[key] = String(m.content || '').replace(/\s+/g, ' ').slice(0, 140);
+    }
+
+    res.json({
+      sessions: sessions.map((s) => ({
+        id: String(s._id),
+        mode: s.mode,
+        modeLabel: MODES[s.mode]?.label || s.mode,
+        status: s.status,
+        startedAt: s.startedAt,
+        endedAt: s.endedAt,
+        messageCount: s.messageCount || 0,
+        concept: s.conceptId
+          ? { id: String(s.conceptId), name: conceptById[String(s.conceptId)]?.name || 'Unknown concept' }
+          : null,
+        classroom: s.classroomId
+          ? { id: String(s.classroomId), name: classroomById[String(s.classroomId)]?.name || 'Unknown classroom' }
+          : null,
+        preview: previewBySession[String(s._id)] || '',
+      })),
+      hasMore: sessions.length === data.limit,
+      nextBefore: sessions.length ? sessions[sessions.length - 1].startedAt : null,
+    });
+  }),
+);
+
 function countWrongStreak(messages) {
   let streak = 0;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
