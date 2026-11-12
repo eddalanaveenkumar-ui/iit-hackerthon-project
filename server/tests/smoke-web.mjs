@@ -137,7 +137,10 @@ const run = async () => {
   const sessionId = started.body.session.id;
 
   const turn = await call(`/tutor/sessions/${sessionId}/messages`, { token: student, method: 'POST', body: { content: 'I think int is 8 bytes on every JVM.', signal: { wrongAnswer: true } } });
-  check('a tutor turn returns the reply + intelligence block', turn.status === 200 && turn.body.message?.content?.length > 20 && turn.body.intelligence);
+  check(
+    `a tutor turn returns the reply + intelligence block (HTTP ${turn.status}, keys: ${Object.keys(turn.body || {}).join('/') || 'none'}${turn.body?.blocked ? ' · blocked' : ''}${turn.body?.error ? ` · ${turn.body.error.code || turn.body.error.message}` : ''})`,
+    turn.status === 200 && turn.body.message?.content?.length > 20 && turn.body.intelligence,
+  );
   // Guard the property rather than dereferencing it: this suite drives dozens of
   // AI-backed flows as one user, so a 429 here is about the rate limit, not about
   // the payload. Crashing on `in undefined` hid that distinction for three runs.
@@ -277,8 +280,15 @@ const run = async () => {
   // is a superset of six rather than exactly six.
   check('admin overview returns provider, models, routing, generation, features', aiOverview.status === 200 && aiOverview.body.models.length >= 6 && aiOverview.body.routing.length > 0 && aiOverview.body.generation);
   // The deployed registry must not advertise a model the endpoint cannot serve.
-  check('deployed registry carries no retired model', !liveModels.includes('nvidia/nemotron-content-safety-reasoning-4b') && !liveModels.includes('qwen/qwen2.5-coder-32b-instruct') && !liveModels.includes('deepseek-ai/deepseek-v4-flash'));
-  check('every deployed route points at a live model', aiOverview.body.routing.every((r) => !r.model || liveModels.includes(r.model)) && aiOverview.body.models.filter((m) => m.retired).every((m) => !m.enabled));
+  const RETIRED = ['nvidia/nemotron-content-safety-reasoning-4b', 'qwen/qwen2.5-coder-32b-instruct', 'deepseek-ai/deepseek-v4-flash'];
+  const stillLive = RETIRED.filter((id) => liveModels.includes(id));
+  check(`deployed registry carries no retired model${stillLive.length ? ` — still enabled: ${stillLive.join(', ')}` : ''}`, stillLive.length === 0);
+  const deadRoutes = aiOverview.body.routing.filter((r) => r.model && !liveModels.includes(r.model));
+  const retiredEnabled = aiOverview.body.models.filter((m) => m.retired && m.enabled);
+  check(
+    `every deployed route points at a live model${deadRoutes.length ? ` — dead: ${deadRoutes.map((r) => `${r.task}->${r.model}`).join(', ')}` : ''}${retiredEnabled.length ? ` — retired but enabled: ${retiredEnabled.map((m) => m.modelId).join(', ')}` : ''}`,
+    deadRoutes.length === 0 && retiredEnabled.length === 0,
+  );
   check('provider credentials are never returned', !JSON.stringify(aiOverview.body).toLowerCase().includes('apikey') || !JSON.stringify(aiOverview.body).match(/"apiKey"\s*:\s*"[^"]{12,}"/));
   check('feature flags are grouped for the toggles tab', aiOverview.body.features.every((f) => f.key && f.label && f.category));
 
