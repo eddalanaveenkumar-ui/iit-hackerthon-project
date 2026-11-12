@@ -16,6 +16,17 @@ import { normaliseVisuals, buildFallbackVisuals } from './visuals.js';
 
 const router = Router();
 
+/**
+ * Cheap pre-screen for content moderation.
+ *
+ * The expensive model call is reserved for text that actually warrants it —
+ * self-harm, threats, abuse, sexual content, or an explicit attempt to get the
+ * tutor to write their assignment. This is a *hint*, not a filter: anything it
+ * matches still goes to the model, and the model's verdict still decides. The
+ * only thing it skips is a round trip for plainly harmless coursework.
+ */
+const MODERATION_HINTS = /\b(kill|suicide|self[- ]?harm|hurt myself|cut myself|abuse|abused|threat|threaten|kill you|hate you|naked|sex|porn|rape|weapon|bomb|overdose|starve)\b|\b(do my homework|write my assignment|write my essay|answer my exam|solve my exam)\b/i;
+
 const MODES = {
   learn: { label: 'Learn a concept', instruction: 'Teach from first principles with a worked example, then ask a diagnostic question.' },
   test: { label: 'Test my understanding', instruction: 'Do not teach yet. Ask 3 progressively harder questions and evaluate each answer.' },
@@ -401,13 +412,21 @@ router.post(
     // ---- Moderation --------------------------------------------------------
     let flagged = false;
     let moderation = null;
-    if (await isFeatureEnabled('content_moderation')) {
+    // Only screen a message that could plausibly need it. Routing every turn
+    // through a second model call doubled (or tripled) the latency of the most
+    // common request and pushed chat turns into gateway timeouts. Obvious
+    // self-harm/abuse language still goes to the model; ordinary coursework does
+    // not need a round trip to decide it is coursework.
+    if ((await isFeatureEnabled('content_moderation')) && MODERATION_HINTS.test(data.content)) {
       const mod = await runJsonTask('moderation', {
         messages: prompts.moderation({ text: data.content }),
         meta: { task: 'moderation' },
         feature: 'content_moderation',
         userId: req.userId,
         classroomId: session.classroomId,
+        // Screening must not hold up the answer: if the model is slow, fall back
+        // to the deterministic analyser rather than making the learner wait.
+        timeoutMs: 8000,
       });
       moderation = mod.data && typeof mod.data === 'object' ? mod.data : null;
       // Strictly interpret the verdict. `Boolean(moderation?.flagged)` treats the

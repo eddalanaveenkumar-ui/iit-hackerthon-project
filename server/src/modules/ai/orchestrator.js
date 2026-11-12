@@ -176,7 +176,7 @@ function costOf(model, usage) {
  */
 export async function runJsonTask(
   task,
-  { messages, meta = {}, feature, userId, classroomId, cacheable = false, signal, pinModel } = {},
+  { messages, meta = {}, feature, userId, classroomId, cacheable = false, signal, pinModel, timeoutMs } = {},
 ) {
   const feat = feature || TASK_FEATURE_MAP[task];
   if (feat && !(await isFeatureEnabled(feat))) {
@@ -235,7 +235,9 @@ export async function runJsonTask(
           topP: params.topP,
           maxTokens: params.maxTokens,
           jsonMode: runtime.generation.jsonMode,
-          timeoutMs: runtime.timeoutMs,
+          // A caller can bound its own call (content screening must not hold up
+          // the answer), but it can never exceed the global ceiling.
+          timeoutMs: Math.min(timeoutMs || runtime.timeoutMs, runtime.timeoutMs),
           meta: { ...meta, task: meta.task || task },
           signal,
         });

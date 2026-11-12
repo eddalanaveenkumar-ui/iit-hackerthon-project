@@ -45,7 +45,12 @@ export const config = {
   ai: {
     nvidiaApiKey: process.env.NVIDIA_API_KEY || '',
     nvidiaBaseUrl: process.env.NVIDIA_BASE_URL || 'https://integrate.api.nvidia.com/v1',
-    requestTimeoutMs: num(process.env.AI_REQUEST_TIMEOUT_MS, 60000),
+    // Must stay comfortably below the serverless function budget
+    // (vercel.json maxDuration, 120s). When these were equal at 60s, a slow
+    // upstream produced a gateway 504 instead of our own error — the request
+    // died at the platform edge with no diagnosis, and the chat turn looked
+    // broken rather than slow.
+    requestTimeoutMs: num(process.env.AI_REQUEST_TIMEOUT_MS, 30000),
     maxRetries: num(process.env.AI_MAX_RETRIES, 2),
     // When no NVIDIA key is configured the platform runs the deterministic
     // local adapter so every workflow remains testable end to end.
