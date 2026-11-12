@@ -70,9 +70,16 @@ export function resolveEndpoint(runtime, model = {}) {
     .replace(/\/+$/, '');
 
   const path = normalisePath(model.endpointPath || defaultPathFor(category));
+  // A model's own key wins over the shared provider key. `credentialSource` on
+  // the model document says which of the two it was, so callers can show either
+  // "own key" or "global key" rather than guessing from the presence of a value.
   const modelKey = model.apiKeyCipher || model.apiKey || '';
   const apiKey = modelKey || runtime.apiKey || '';
-  const apiKeySource = modelKey ? 'model' : runtime.credentialSource || (apiKey ? 'environment' : 'none');
+  const apiKeySource = modelKey
+    ? model.credentialSource === 'model-env'
+      ? 'model-env'
+      : 'model'
+    : runtime.credentialSource || (apiKey ? 'environment' : 'none');
 
   return {
     category,

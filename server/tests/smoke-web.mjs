@@ -266,9 +266,23 @@ const run = async () => {
   check('non-admins cannot read AI configuration', denied.status === 403);
 
   const aiOverview = await call('/ai/admin/overview', { token: admin });
-  check('admin overview returns provider, models, routing, generation, features', aiOverview.status === 200 && aiOverview.body.models.length === 8 && aiOverview.body.routing.length > 0 && aiOverview.body.generation);
+  const liveModels = aiOverview.body.models.filter((m) => m.enabled).map((m) => m.modelId);
+  // Migrated deployments keep retired documents for usage history, so the total
+  // is a superset of six rather than exactly six.
+  check('admin overview returns provider, models, routing, generation, features', aiOverview.status === 200 && aiOverview.body.models.length >= 6 && aiOverview.body.routing.length > 0 && aiOverview.body.generation);
+  // The deployed registry must not advertise a model the endpoint cannot serve.
+  check('deployed registry carries no retired model', !liveModels.includes('nvidia/nemotron-content-safety-reasoning-4b') && !liveModels.includes('qwen/qwen2.5-coder-32b-instruct') && !liveModels.includes('deepseek-ai/deepseek-v4-flash'));
+  check('every deployed route points at a live model', aiOverview.body.routing.every((r) => !r.model || liveModels.includes(r.model)) && aiOverview.body.models.filter((m) => m.retired).every((m) => !m.enabled));
   check('provider credentials are never returned', !JSON.stringify(aiOverview.body).toLowerCase().includes('apikey') || !JSON.stringify(aiOverview.body).match(/"apiKey"\s*:\s*"[^"]{12,}"/));
   check('feature flags are grouped for the toggles tab', aiOverview.body.features.every((f) => f.key && f.label && f.category));
+
+  // One key per model: the page needs to know which slots are filled before it
+  // renders the keys tab, and must never receive the secrets themselves.
+  const creds = await call('/ai/admin/credentials', { token: admin });
+  check('credential slots are exposed for the API keys tab', creds.status === 200 && creds.body.slots === 8 && creds.body.callableSlots === 6);
+  check('the keys tab is told which models are unserved', creds.body.unavailable.length === 2 && creds.body.unavailable.every((u) => u.reason));
+  check('each callable model reports its credential slot and source', creds.body.models.every((m) => m.credentialSlot && typeof m.source === 'string'));
+  check('no key material reaches the browser', !JSON.stringify(creds.body).includes('nvapi-'));
 
   const usage = await call('/ai/admin/usage?days=30', { token: admin });
   check('usage analytics has totals, by-model, by-classroom and daily series', usage.status === 200 && usage.body.totals && usage.body.byModel.length > 0 && Array.isArray(usage.body.daily));

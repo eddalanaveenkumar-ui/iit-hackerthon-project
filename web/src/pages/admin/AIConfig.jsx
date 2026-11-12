@@ -68,6 +68,7 @@ export default function AIConfig() {
         tabs={[
           { key: 'provider', label: 'Provider' },
           { key: 'models', label: 'Models', count: data.models.length },
+          { key: 'credentials', label: 'API keys', count: data.credentials?.configuredCount ?? 0 },
           { key: 'routing', label: 'Task routing' },
           { key: 'generation', label: 'Generation' },
           { key: 'features', label: 'Features', count: data.features.length },
@@ -78,6 +79,7 @@ export default function AIConfig() {
 
       {tab === 'provider' ? <ProviderTab data={data} onSaved={load} toast={toast} /> : null}
       {tab === 'models' ? <ModelsTab data={data} onChanged={load} toast={toast} setBusy={setBusy} busy={busy} /> : null}
+      {tab === 'credentials' ? <CredentialsTab data={data} onChanged={load} toast={toast} /> : null}
       {tab === 'routing' ? <RoutingTab data={data} onChanged={load} toast={toast} /> : null}
       {tab === 'generation' ? <GenerationTab data={data} onChanged={load} toast={toast} /> : null}
       {tab === 'features' ? <FeaturesTab data={data} onChanged={load} toast={toast} /> : null}
@@ -412,6 +414,237 @@ function EndpointCell({ endpoint, onEdit }) {
           Edit
         </button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * API keys — one slot per model.
+ *
+ * NIM accepts one key for everything, but quotas are per key, so all six models
+ * sharing the global key means one busy tutoring session can starve assessment
+ * grading. This tab exists to make that split visible and doable without
+ * knowing which model id lives behind which tab: every callable model gets a
+ * row, plus the two models the provider does not serve, so the count is honest.
+ */
+function CredentialsTab({ data, onChanged, toast }) {
+  const [state, setState] = useState(null);
+  const [error, setError] = useState('');
+  const [editing, setEditing] = useState(null);
+  const [draft, setDraft] = useState('');
+  const [saving, setSaving] = useState('');
+
+  const load = useCallback(async () => {
+    try {
+      setState(await api('/ai/admin/credentials'));
+    } catch (e) {
+      setError(e.message);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const save = async (modelId) => {
+    if (draft.trim().length < 8) {
+      toast.error('A key is at least 8 characters');
+      return;
+    }
+    setSaving(modelId);
+    try {
+      await api(`/ai/admin/credentials/${encodeURIComponent(modelId)}`, { method: 'PATCH', body: { apiKey: draft.trim() } });
+      toast.success('Key saved for this model only');
+      setEditing(null);
+      setDraft('');
+      await load();
+      onChanged();
+    } catch (e) {
+      toast.error(e.message);
+    } finally {
+      setSaving('');
+    }
+  };
+
+  const clear = async (modelId) => {
+    setSaving(modelId);
+    try {
+      await api(`/ai/admin/credentials/${encodeURIComponent(modelId)}`, { method: 'PATCH', body: { clearApiKey: true } });
+      toast.success('Key cleared — falls back to the global key');
+      await load();
+      onChanged();
+    } catch (e) {
+      toast.error(e.message);
+    } finally {
+      setSaving('');
+    }
+  };
+
+  if (error) return <ErrorBanner message={error} />;
+  if (!state) return <LoadingBlock rows={4} />;
+
+  const sourceTone = { model: 'success', 'model-env': 'success', global: 'warning', none: 'danger' };
+  const sourceLabel = {
+    model: 'own key',
+    'model-env': 'own key (env)',
+    global: 'global key',
+    none: 'no key',
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="card card-pad flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white">
+            <KeyRound className="h-4 w-4 text-slate-400" /> One key per model
+          </h2>
+          <p className="mt-0.5 max-w-2xl text-xs text-slate-500 dark:text-slate-400">
+            Each model can hold its own key, so a rate limit on one never stops the others. A model with no key of its
+            own uses the global provider key. {state.slots} slots exist: {state.callableSlots} callable,{' '}
+            {state.unavailable.length} not served by the provider.
+          </p>
+        </div>
+        <div className="text-right text-xs">
+          <p className="font-semibold text-slate-800 dark:text-slate-100">
+            {state.configured} of {state.callableSlots} with their own key
+          </p>
+          <p className="text-slate-500 dark:text-slate-400">
+            {state.usingGlobal} on the global key · {state.missing} with none
+          </p>
+        </div>
+      </div>
+
+      {state.configured === 0 ? (
+        <div className="card card-pad border-amber-200 text-xs dark:border-amber-900">
+          <p className="font-semibold text-amber-800 dark:text-amber-200">All models share one quota</p>
+          <p className="mt-0.5 text-slate-600 dark:text-slate-300">
+            No model has its own key yet, so the six callable models draw on a single NVIDIA key. Give each one its own
+            key to split the 40 requests/minute free allowance.
+          </p>
+        </div>
+      ) : null}
+
+      <div className="card overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="table-base">
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>Key</th>
+                <th>Environment slot</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {state.models.map((m) => (
+                <tr key={m.modelId}>
+                  <td>
+                    <p className="font-medium text-slate-800 dark:text-slate-100">{m.displayName}</p>
+                    <p className="font-mono text-[11px] text-slate-500 dark:text-slate-400">{m.modelId}</p>
+                  </td>
+                  <td>
+                    <Badge tone={sourceTone[m.source] || 'neutral'}>{sourceLabel[m.source] || m.source}</Badge>
+                    {m.apiKeyPreview ? (
+                      <p className="mt-0.5 font-mono text-[10.5px] text-slate-400">{m.apiKeyPreview}</p>
+                    ) : null}
+                  </td>
+                  <td>
+                    <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[10.5px] text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                      {m.credentialSlot}
+                    </code>
+                  </td>
+                  <td className="text-right">
+                    {editing === m.modelId ? (
+                      <span className="flex items-center justify-end gap-1">
+                        <input
+                          className="input w-44 py-1 font-mono text-xs"
+                          type="password"
+                          autoFocus
+                          placeholder="nvapi-…"
+                          value={draft}
+                          onChange={(e) => setDraft(e.target.value)}
+                        />
+                        <button onClick={() => save(m.modelId)} className="btn-primary btn-sm" disabled={saving === m.modelId}>
+                          {saving === m.modelId ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Save'}
+                        </button>
+                        <button
+                          onClick={() => {
+                            setEditing(null);
+                            setDraft('');
+                          }}
+                          className="btn-ghost btn-sm"
+                        >
+                          Cancel
+                        </button>
+                      </span>
+                    ) : (
+                      <span className="flex items-center justify-end gap-2">
+                        <button
+                          onClick={() => {
+                            setEditing(m.modelId);
+                            setDraft('');
+                          }}
+                          className="text-[11px] font-medium text-brand-600 hover:underline dark:text-brand-400"
+                        >
+                          {m.hasOwnKey ? 'Replace key' : 'Add key'}
+                        </button>
+                        {m.hasOwnKey ? (
+                          <button
+                            onClick={() => clear(m.modelId)}
+                            className="text-[11px] font-medium text-rose-600 hover:underline"
+                            disabled={saving === m.modelId}
+                          >
+                            Clear
+                          </button>
+                        ) : null}
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {state.unavailable.map((m) => (
+                <tr key={m.modelId} className="opacity-60">
+                  <td>
+                    <p className="font-medium text-slate-800 dark:text-slate-100">{m.displayName}</p>
+                    <p className="font-mono text-[11px] text-slate-500 dark:text-slate-400">{m.modelId}</p>
+                  </td>
+                  <td>
+                    <Badge tone="danger">
+                      <XCircle className="h-3 w-3" /> not available
+                    </Badge>
+                  </td>
+                  <td>
+                    <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[10.5px] text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                      {m.credentialKey}
+                    </code>
+                  </td>
+                  <td className="text-right">
+                    <span className="text-[11px] text-slate-400">A key cannot be used — the model is not served</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <p className="px-1 text-[11px] text-slate-500 dark:text-slate-400">
+        Keys are encrypted at rest with AES-256-GCM and never returned to the browser — only the masked preview above.
+        The environment slot is a fallback for deployments that prefer configuration over the admin panel: set{' '}
+        <code className="rounded bg-slate-100 px-1 dark:bg-slate-800">NVIDIA_API_KEY_LIGHTNING</code> and that model uses
+        it with no database write at all.
+      </p>
+
+      {state.unavailable.length ? (
+        <div className="card card-pad border-slate-200 text-[11.5px] dark:border-slate-700">
+          <p className="font-semibold text-slate-800 dark:text-slate-100">Why only six of the eight can hold a key</p>
+          <ul className="mt-1 space-y-1 text-slate-600 dark:text-slate-300">
+            {state.unavailable.map((m) => (
+              <li key={m.modelId}>• {m.reason}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </div>
   );
 }

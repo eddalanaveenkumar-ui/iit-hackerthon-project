@@ -6,6 +6,17 @@
  * Availability is NEVER assumed: the admin panel runs a live catalogue check
  * against the NVIDIA API and stores the verified status in the ai_models
  * collection (`availability`, `validatedAt`, `validationMessage`).
+ *
+ * CREDENTIALS — one slot per model, not one for the whole provider.
+ *
+ * NIM accepts a single key for every model, but quotas are enforced per key, so
+ * a deployment that mixes tutoring, assessment grading and embeddings against
+ * one key starves whichever runs most. Every model therefore carries its own
+ * credential: an encrypted key in `ai_models.apiKeyCipher` (set in the admin
+ * panel) or its own environment variable (`credentialKey` below). Resolution
+ * order is model database key -> model environment key -> global key, so a
+ * deployment can start with one shared key and split it model by model without
+ * a redeploy.
  */
 
 export const NVIDIA_PROVIDER = 'nvidia';
@@ -14,6 +25,7 @@ export const MODEL_REGISTRY_SEED = [
   {
     provider: NVIDIA_PROVIDER,
     modelId: 'nvidia/nemotron-3.5-lightning-30b-a3b',
+    credentialKey: 'NVIDIA_API_KEY_LIGHTNING',
     displayName: 'Nemotron 3.5 Lightning 30B A3B',
     category: 'chat',
     capabilities: ['chat', 'tutoring', 'structured_json', 'fast', 'gap_analysis'],
@@ -24,6 +36,7 @@ export const MODEL_REGISTRY_SEED = [
   {
     provider: NVIDIA_PROVIDER,
     modelId: 'nvidia/nemotron-3-ultra-550b-a55b',
+    credentialKey: 'NVIDIA_API_KEY_ULTRA',
     displayName: 'Nemotron 3 Ultra 550B A55B',
     category: 'reasoning',
     capabilities: ['chat', 'deep_reasoning', 'assessment_generation', 'structured_json'],
@@ -34,6 +47,7 @@ export const MODEL_REGISTRY_SEED = [
   {
     provider: NVIDIA_PROVIDER,
     modelId: 'nvidia/nemotron-3.5-embed-1b',
+    credentialKey: 'NVIDIA_API_KEY_EMBED',
     displayName: 'Nemotron 3.5 Embed 1B',
     category: 'embedding',
     capabilities: ['embeddings', 'retrieval'],
@@ -44,6 +58,7 @@ export const MODEL_REGISTRY_SEED = [
   {
     provider: NVIDIA_PROVIDER,
     modelId: 'nvidia/nemotron-3.5-rerank-8b',
+    credentialKey: 'NVIDIA_API_KEY_RERANK',
     displayName: 'Nemotron 3.5 Rerank 8B',
     category: 'rerank',
     capabilities: ['rerank', 'retrieval_ranking'],
@@ -54,6 +69,7 @@ export const MODEL_REGISTRY_SEED = [
   {
     provider: NVIDIA_PROVIDER,
     modelId: 'nvidia/nemotron-3.5-parse',
+    credentialKey: 'NVIDIA_API_KEY_PARSE',
     displayName: 'Nemotron 3.5 Parse',
     category: 'parse',
     capabilities: ['document_parsing', 'ocr', 'structure_extraction'],
@@ -64,6 +80,7 @@ export const MODEL_REGISTRY_SEED = [
   {
     provider: NVIDIA_PROVIDER,
     modelId: 'deepseek-ai/deepseek-v4.1-flash',
+    credentialKey: 'NVIDIA_API_KEY_DEEPSEEK',
     displayName: 'DeepSeek V4.1 Flash',
     category: 'chat',
     capabilities: ['chat', 'fast', 'structured_json', 'vision', 'fallback'],
@@ -90,6 +107,31 @@ export const RETIRED_MODELS = {
   'deepseek-ai/deepseek-v4-flash':
     'Superseded by deepseek-ai/deepseek-v4.1-flash (same family, multimodal). Routes were migrated automatically.',
 };
+
+/**
+ * The two models an operator asked for eight keys for, and could not get.
+ *
+ * They are declared here rather than deleted so the admin panel can show the
+ * full eight-slot picture: six slots that work, and two that explain why they
+ * do not. `credentialKey` is listed anyway — if NVIDIA ever ships them, adding
+ * the id back to MODEL_REGISTRY_SEED is the whole change, and the env slot is
+ * already reserved.
+ */
+export const UNAVAILABLE_MODELS = {
+  'nvidia/nemotron-content-safety-reasoning-4b': {
+    displayName: 'Nemotron Content Safety Reasoning 4B',
+    credentialKey: 'NVIDIA_API_KEY_SAFETY',
+    reason: 'Not served on the NVIDIA API catalogue. Moderation runs on Nemotron 3.5 Lightning instead.',
+  },
+  'qwen/qwen2.5-coder-32b-instruct': {
+    displayName: 'Qwen 2.5 Coder 32B Instruct',
+    credentialKey: 'NVIDIA_API_KEY_QWEN',
+    reason: 'Not served on the NVIDIA API catalogue. Code analysis runs on Nemotron 3 Ultra instead.',
+  },
+};
+
+/** Every model the platform knows about, callable or not: 6 + 2 = 8 slots. */
+export const CATALOGUE_SLOT_COUNT = MODEL_REGISTRY_SEED.length + Object.keys(UNAVAILABLE_MODELS).length;
 
 /** Seed id -> replacement id, applied to stored routes during bootstrap. */
 export const RETIRED_MODEL_REPLACEMENTS = {

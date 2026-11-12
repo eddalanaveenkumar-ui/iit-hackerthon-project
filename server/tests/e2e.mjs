@@ -677,6 +677,84 @@ async function main() {
     'clearing an override restores the global endpoint',
   );
 
+  section('16b. Per-model API keys — one slot each, six callable');
+  // The platform is asked to hold eight keys: one per model. Six models are
+  // callable, two are not served by the provider. A single global key would mean
+  // every model drawing on one 40 RPM quota, so each must be able to hold its own.
+  const creds0 = await api('/api/ai/admin/credentials', { token: admin.token });
+  ok(creds0.status === 200, 'admin reads the per-model credential list');
+  ok(creds0.body.slots === 8, `eight credential slots are reported (${creds0.body.slots})`);
+  ok(creds0.body.callableSlots === 6, `six of the eight are callable (${creds0.body.callableSlots})`);
+  ok(creds0.body.unavailable.length === 2, 'the two unserved models are listed rather than silently dropped');
+  ok(
+    creds0.body.unavailable.every((u) => u.canSetKey === false && u.reason),
+    'an unserved model refuses a key and explains why',
+  );
+  ok(creds0.body.models.length === 6, 'the six callable models each get a row');
+  ok(
+    creds0.body.models.every((m) => m.credentialSlot && m.credentialSlot.endsWith('_API_KEY') === false),
+    'every callable model names its own environment slot',
+  );
+  ok(
+    new Set(creds0.body.models.map((m) => m.credentialSlot)).size === 6,
+    'the six slots are distinct — no model shares another\'s key',
+  );
+  ok(!JSON.stringify(creds0.body).includes('nvapi-per-model-test-key-0001'), 'no stored key is returned in clear text');
+
+  // Give exactly one model its own key and confirm nothing else changed.
+  const target = 'nvidia/nemotron-3.5-parse';
+  const setKey = await api(`/api/ai/admin/credentials/${encodeURIComponent(target)}`, {
+    method: 'PATCH',
+    token: admin.token,
+    body: { apiKey: 'nvapi-parse-only-key-000001' },
+  });
+  ok(setKey.status === 200, 'admin can give a single model its own key');
+  const creds1 = await api('/api/ai/admin/credentials', { token: admin.token });
+  const parseRow = creds1.body.models.find((m) => m.modelId === target);
+  ok(parseRow.hasOwnKey === true && parseRow.source === 'model', 'that model now reports its own key');
+  ok(creds1.body.configured === 1, 'exactly one model is configured, not all of them');
+  ok(
+    creds1.body.models.filter((m) => m.modelId !== target).every((m) => !m.hasOwnKey),
+    'the other five models are untouched by a per-model key',
+  );
+  ok(!JSON.stringify(creds1.body).includes('nvapi-parse-only-key-000001'), 'the key is masked in the response');
+  ok(
+    parseRow.apiKeyPreview && parseRow.apiKeyPreview.includes('••••') && parseRow.apiKeyPreview.endsWith('0001'),
+    'a masked preview is shown so an operator can tell keys apart',
+  );
+
+  // The endpoint map must reflect the per-model key, not the global one.
+  const epAfterKey = await api('/api/ai/admin/models/endpoints', { token: admin.token });
+  const parseEp = epAfterKey.body.endpoints.find((e) => e.modelId === target);
+  ok(parseEp.apiKeySource === 'model', 'the endpoint map attributes the call to the model key');
+  ok(parseEp.credentialSlot === 'NVIDIA_API_KEY_PARSE', 'the endpoint map names the model\'s own slot');
+
+  // A retired model cannot be given a key — accepting one would imply it works.
+  const retiredKey = await api('/api/ai/admin/credentials/nvidia%2Fnemotron-content-safety-reasoning-4b', {
+    method: 'PATCH',
+    token: admin.token,
+    body: { apiKey: 'nvapi-should-not-be-accepted' },
+  });
+  ok(retiredKey.status === 404 || retiredKey.status === 400, 'a retired model cannot be given a key');
+
+  const staffCreds = await api('/api/ai/admin/credentials', { token: naveen.token });
+  ok(staffCreds.status === 403, 'non-admin cannot read or set model keys');
+
+  // Clearing restores inheritance from the global key.
+  const cleared = await api(`/api/ai/admin/credentials/${encodeURIComponent(target)}`, {
+    method: 'PATCH',
+    token: admin.token,
+    body: { clearApiKey: true },
+  });
+  ok(cleared.status === 200, 'a per-model key can be cleared');
+  const creds2 = await api('/api/ai/admin/credentials', { token: admin.token });
+  ok(creds2.body.models.find((m) => m.modelId === target).hasOwnKey === false, 'clearing falls the model back to the global key');
+
+  // Overview surfaces the same split so the Models tab is not misleading.
+  const overviewCreds = (await api('/api/ai/admin/overview', { token: admin.token })).body.credentials;
+  ok(overviewCreds && overviewCreds.modelCount === 6, 'the overview reports six credential slots');
+  ok(typeof overviewCreds.distinctKeySlots === 'number', 'the overview reports how many distinct keys are held');
+
   section('16c. Chat renders visual explanations alongside prose');
   // Starting a session ends any prior active session in that classroom, so this
   // section opens its own instead of reusing one from earlier.

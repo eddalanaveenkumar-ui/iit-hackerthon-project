@@ -20,7 +20,7 @@ import {
   clearAiCache,
   getProvider,
 } from './orchestrator.js';
-import { AI_TASKS, FEATURE_DEFINITIONS } from './catalog.js';
+import { AI_TASKS, FEATURE_DEFINITIONS, UNAVAILABLE_MODELS, CATALOGUE_SLOT_COUNT } from './catalog.js';
 import { validateBaseUrl, normalisePath, defaultPathFor, resolveEndpoint } from './endpoints.js';
 
 const router = Router();
@@ -53,7 +53,20 @@ router.get(
         health,
       },
       generation: runtime.generation,
-      models: bundle.models.map(publicModel),
+      models: bundle.models.map((m) => publicModel(m, runtime.models?.[m.modelId])),
+      credentials: {
+        modelCount: runtime.modelCount || 0,
+        configuredCount: runtime.modelKeyCount || 0,
+        fromEnvironment: runtime.credentialsFromEnv || 0,
+        globalKeyConfigured: Boolean(runtime.apiKey),
+        // The number of *distinct* keys the platform is actually holding. If
+        // this is 1 for six models, every model shares one quota.
+        distinctKeySlots: new Set(
+          Object.values(runtime.models || {})
+            .filter((m) => m.apiKeyCipher)
+            .map((m) => m.apiKeyCipher),
+        ).size,
+      },
       routing: Object.values(bundle.routes).map(publicRoute),
       features: Object.values(bundle.flags).map(publicFlag),
       tasks: AI_TASKS.map((t) => ({ key: t.key, label: t.label, description: t.description })),
@@ -63,7 +76,13 @@ router.get(
   }),
 );
 
-function publicModel(m) {
+/**
+ * @param {object} m        stored ai_models document
+ * @param {object} [runtime] resolved model from getRuntimeConfig().models, used
+ *                           to report where its key came from without ever
+ *                           exposing the key itself.
+ */
+function publicModel(m, runtime) {
   return {
     id: String(m._id),
     provider: m.provider,
@@ -77,6 +96,17 @@ function publicModel(m) {
     notes: m.notes || '',
     validatedAt: m.validatedAt || null,
     validationMessage: m.validationMessage || '',
+    retired: Boolean(m.retired),
+    // Credential state per model. The key itself is never serialised — only
+    // where it came from and where an operator can put a new one.
+    credentialSlot: runtime?.credentialSlot || m.credentialKey || '',
+    credentialSource: runtime?.credentialSource || 'none',
+    hasStoredKey: Boolean(runtime?.hasStoredKey),
+    hasEnvKey: Boolean(runtime?.hasEnvKey),
+    apiKeyPreview: m.apiKeyPreview || '',
+    endpointBaseUrl: m.endpointBaseUrl || '',
+    endpointPath: m.endpointPath || '',
+    inheritsGlobalKey: !runtime?.apiKeyCipher,
   };
 }
 
@@ -228,6 +258,114 @@ router.patch(
 );
 
 /**
+ * Per-model credentials — the "one key per model" view.
+ *
+ * Every model in the registry gets an entry whether or not it has a key yet, so
+ * the admin panel can show six slots and which of them are filled rather than
+ * making an operator discover the per-model editor row by row. Keys are
+ * write-only: the response carries a masked preview and the source, never the
+ * secret, and never the environment value.
+ */
+router.get(
+  '/admin/credentials',
+  asyncHandler(async (req, res) => {
+    const runtime = await getRuntimeConfig();
+    const bundle = await getConfigBundle(true);
+    const models = bundle.models
+      .filter((m) => !m.retired)
+      .map((m) => {
+        const rt = runtime.models?.[m.modelId] || {};
+        const slot = rt.credentialSlot || m.credentialKey || '';
+        return {
+          modelId: m.modelId,
+          displayName: m.displayName,
+          category: m.category,
+          enabled: m.enabled !== false,
+          credentialSlot: slot,
+          // 'model' = saved in the database, 'model-env' = its own environment
+          // variable, 'global' = falling back to the shared provider key.
+          source: rt.hasStoredKey ? 'model' : rt.hasEnvKey ? 'model-env' : runtime.apiKey ? 'global' : 'none',
+          hasOwnKey: Boolean(rt.hasStoredKey || rt.hasEnvKey),
+          apiKeyPreview: m.apiKeyPreview || '',
+          envConfigured: Boolean(rt.hasEnvKey),
+          endpoint: resolveEndpoint(runtime, m).url,
+        };
+      });
+    res.json({
+      baseUrl: runtime.baseUrl,
+      globalKeyConfigured: Boolean(runtime.apiKey),
+      callableSlots: models.length,
+      // Eight slots were requested: six models that can be called and two that
+      // the provider does not serve. Reporting only six would look like the
+      // request was ignored, so the two are listed with the reason.
+      slots: CATALOGUE_SLOT_COUNT,
+      unavailable: Object.entries(UNAVAILABLE_MODELS).map(([modelId, v]) => ({
+        modelId,
+        displayName: v.displayName,
+        credentialKey: v.credentialKey,
+        reason: v.reason,
+        // Deliberately false: a key cannot be saved for a model that cannot be
+        // called, and accepting one would imply it worked.
+        canSetKey: false,
+      })),
+      configured: models.filter((m) => m.hasOwnKey).length,
+      usingGlobal: models.filter((m) => m.source === 'global').length,
+      missing: models.filter((m) => m.source === 'none').length,
+      models,
+    });
+  }),
+);
+
+/**
+ * Set or clear one model's key without touching the others.
+ *
+ * PATCH /api/ai/admin/credentials/nvidia%2Fnemotron-3.5-parse
+ *   { apiKey: 'nvapi-…' }  -> encrypted, used only for that model
+ *   { clearApiKey: true }  -> falls back to its env slot, then the global key
+ */
+router.patch(
+  '/admin/credentials/*modelId',
+  asyncHandler(async (req, res) => {
+    const data = validate(
+      z.object({
+        apiKey: z.string().min(8).max(400).optional(),
+        clearApiKey: z.boolean().optional(),
+      }),
+      req.body,
+    );
+    if (!data.apiKey && !data.clearApiKey) throw badRequest('Provide apiKey or clearApiKey');
+    const raw = req.params.modelId;
+    const modelId = Array.isArray(raw) ? raw.join('/') : String(raw || '');
+    const db = getDb();
+    const model = await db.collection('ai_models').findOne({ modelId });
+    if (!model) throw notFound('Model not registered');
+    if (model.retired) throw badRequest('This model is retired and cannot be called');
+
+    if (data.clearApiKey) {
+      await db.collection('ai_models').updateOne(
+        { _id: model._id },
+        { $set: { apiKeyCipher: '', apiKeyPreview: '', updatedAt: new Date() } },
+      );
+    } else {
+      await db.collection('ai_models').updateOne(
+        { _id: model._id },
+        { $set: { apiKeyCipher: encryptSecret(data.apiKey), apiKeyPreview: maskSecret(data.apiKey), updatedAt: new Date() } },
+      );
+    }
+    invalidateAiCache();
+    await logAudit({
+      actorId: req.userId,
+      action: data.clearApiKey ? 'ai.model_key_cleared' : 'ai.model_key_set',
+      target: modelId,
+      // The key itself is never audited, only that it changed.
+      meta: { credentialSlot: model.credentialKey || '', keyChanged: Boolean(data.apiKey) },
+      ip: req.ip,
+    });
+    res.json({ ok: true, modelId, message: data.clearApiKey ? 'Key cleared for this model.' : 'Key saved for this model only.' });
+  }),
+);
+
+/**
  * The exact URL each model will be called on. Resolved server-side so the admin
  * panel never has to guess, and so a misrouted model (chat model on the rerank
  * path, say) is visible before it fails in a lesson.
@@ -246,7 +384,11 @@ router.get(
       // provider: where a model *would* be called is a property of the model,
       // not of whether a key happens to be configured right now.
       endpoints: bundle.models.map((model) => {
-        const ep = resolveEndpoint(runtime, model);
+        // Resolve against the *runtime* model, whose key is decrypted and whose
+        // source is known. Passing the raw document here would hand the resolver
+        // the AES blob and make it claim every model has its own key.
+        const rtModel = runtime.models?.[model.modelId] || model;
+        const ep = resolveEndpoint(runtime, rtModel);
         return {
           modelId: model.modelId,
           displayName: model.displayName,
@@ -255,7 +397,11 @@ router.get(
           baseUrl: ep.baseUrl,
           path: ep.path,
           url: ep.url,
+          // 'model' (its own saved key), 'model-env' (its own env slot) or
+          // 'global' (the shared provider key). Never just a boolean: "no key"
+          // and "borrowing the global key" are very different states.
           apiKeySource: ep.apiKeySource,
+          credentialSlot: rtModel.credentialKey || '',
           hasOwnCredentials: ep.hasOwnCredentials,
           configured: ep.apiKeySource !== 'none',
           enabled: model.enabled,
@@ -278,14 +424,18 @@ router.post(
     const model = bundle.models.find((m) => m.modelId === data.modelId);
     if (!model) throw notFound('Model not registered');
 
-    const ep = resolveEndpoint(runtime, model);
+    // Resolve through the runtime model so a key stored on the model document
+    // (or in its own environment slot) is actually the one used for the test.
+    const rtModel = runtime.models?.[model.modelId] || model;
+    const ep = resolveEndpoint(runtime, rtModel);
     if (!ep.apiKey) {
       return res.status(400).json({
         ok: false,
         modelId: model.modelId,
         endpoint: ep.url,
+        credentialSlot: model.credentialKey || '',
         detail:
-          'No API key for this model and no global key configured, so the endpoint cannot be tested. The model currently runs on the local analyser.',
+          'This model has no key of its own and no global key is configured, so the endpoint cannot be tested. The model currently runs on the local analyser.',
       });
     }
 
