@@ -190,7 +190,16 @@ export async function bootstrapAiCatalog({ models = [], routes = [], flags = [],
       .find({ modelId: { $in: retiredIds } })
       .toArray();
     for (const m of retiredModels) {
-      if (m.retired) continue;
+      // Re-assert the whole state, not just the first time.
+      //
+      // Skipping when `retired` is already true looked idempotent but was not:
+      // an admin can toggle `enabled` back on from the panel, and the model then
+      // stays retired-but-enabled forever. Production ended up exactly like that
+      // with deepseek-v4-flash, and the smoke suite caught it. Every boot now
+      // restores the invariant: a retired model is always disabled and always
+      // marked unavailable.
+      const settled = m.retired && m.enabled === false && m.availability === 'unavailable';
+      if (settled) continue;
       await db.collection('ai_models').updateOne(
         { _id: m._id },
         {

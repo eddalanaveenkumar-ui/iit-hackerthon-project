@@ -151,6 +151,30 @@ check('a model id maps to a derived slot even without an explicit one', () => {
   assert.equal(envSlotName('nvidia/nemotron-9-future-1b'), 'NVIDIA_NEMOTRON_9_FUTURE_1B_API_KEY');
 });
 
+// A retired model must be re-disabled on every boot, not just the first.
+//
+// This is not hypothetical: production had deepseek-v4-flash flagged retired but
+// still enabled, so the live smoke suite reported it as a live model. The old
+// code skipped any record already marked `retired`, so a later admin toggle of
+// `enabled` was never corrected and the invariant silently drifted.
+await db.collection('ai_models').updateOne(
+  { modelId: 'deepseek-ai/deepseek-v4-flash' },
+  { $set: { retired: true, enabled: true, availability: 'unknown' } },
+);
+await bootstrapAiCatalog();
+const drifted = await db.collection('ai_models').findOne({ modelId: 'deepseek-ai/deepseek-v4-flash' });
+check('a retired model toggled back on is disabled again on the next boot', () => {
+  assert.equal(drifted.retired, true);
+  assert.equal(drifted.enabled, false, 'a retired model must never be enabled');
+  assert.equal(drifted.availability, 'unavailable');
+});
+
+const allAfter = await db.collection('ai_models').find({}).toArray();
+check('every retired model is disabled, whatever its previous state', () => {
+  const bad = allAfter.filter((m) => m.retired && m.enabled);
+  assert.equal(bad.length, 0, `retired but enabled: ${bad.map((m) => m.modelId).join(', ')}`);
+});
+
 // Idempotency: a second boot must not churn records or duplicate anything.
 await bootstrapAiCatalog();
 const modelsAgain = await db.collection('ai_models').find({}).toArray();
