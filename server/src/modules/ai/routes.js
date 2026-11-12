@@ -477,11 +477,37 @@ router.post(
         detail: 'Chat endpoint responded',
       });
     } catch (err) {
-      return res.status(err.status || 502).json({
+      // A failed endpoint test is a *finding*, not a failed request.
+      //
+      // This used to return the upstream status (401/429/504...), so the admin
+      // panel surfaced the provider's error as a page-level "Unable to connect.
+      // Retry" — which reads like LearnMate is down when the truth is "this key
+      // was rejected" or "the model was slow". Report it as a normal 200 payload
+      // with ok:false and a category the UI can explain.
+      const status = err.status || 502;
+      const reason = status === 401 || status === 403 ? 'rejected_key'
+        : status === 429 ? 'rate_limited'
+        : status === 404 ? 'not_served'
+        : status === 408 || status === 504 ? 'timeout'
+        : status >= 500 ? 'upstream_error'
+        : 'error';
+      return res.json({
         ok: false,
         modelId: model.modelId,
         endpoint: ep.url,
+        status,
+        reason,
         detail: err.message,
+        hint:
+          reason === 'rejected_key'
+            ? 'NVIDIA rejected this key. Check the key for this model (or the global key) and save it again.'
+            : reason === 'rate_limited'
+              ? 'The key is valid but has hit its rate limit. Give this model its own key to split the quota.'
+              : reason === 'not_served'
+                ? 'The provider does not serve this model id at this endpoint.'
+                : reason === 'timeout'
+                  ? 'The model did not answer in time. Large reasoning models can be slow; retry, or route this task to a faster model.'
+                  : 'The provider did not answer successfully. The app still works — this model simply could not be verified.',
       });
     }
   }),

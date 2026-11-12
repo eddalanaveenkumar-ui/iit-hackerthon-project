@@ -1006,6 +1006,39 @@ async function main() {
     `an AI-recommended assessment is still generated normally (${backstopAssessment.status}, ${backstopAssessment.body?.questions?.length ?? 0} questions)`,
   );
 
+  section('16c5. A failed endpoint probe is a finding, not a broken app');
+
+  // The admin panel used to show the provider's error as a page-level failure, so
+  // "this key was rejected" looked like "LearnMate is down". A probe must always
+  // answer 200 with ok:false and a reason the UI can explain.
+  const probeTarget = 'nvidia/nemotron-3.5-parse';
+  await api(`/api/ai/admin/models/${encodeURIComponent(probeTarget)}`, {
+    method: 'PATCH',
+    token: admin.token,
+    body: { apiKey: 'nvapi-probe-should-fail-0001', endpointBaseUrl: 'http://127.0.0.1:9/v1' },
+  });
+  const failedProbe = await api('/api/ai/admin/models/endpoints/test', {
+    method: 'POST',
+    token: admin.token,
+    body: { modelId: probeTarget },
+  });
+  ok(failedProbe.status === 200, `a failed probe still returns a normal response (${failedProbe.status})`);
+  ok(failedProbe.body.ok === false, 'the probe reports that it did not succeed');
+  ok(typeof failedProbe.body.reason === 'string' && failedProbe.body.reason.length > 0,
+    `the probe names a reason (${failedProbe.body.reason})`);
+  ok(/still works|app itself is working/i.test(failedProbe.body.hint || ''),
+    'the hint makes clear the application is unaffected');
+
+  // The probe failing must not take the rest of the admin console with it.
+  const stillFine = await api('/api/ai/admin/overview', { token: admin.token });
+  ok(stillFine.status === 200, 'the admin console still loads after a failed probe');
+
+  await api(`/api/ai/admin/models/${encodeURIComponent(probeTarget)}`, {
+    method: 'PATCH',
+    token: admin.token,
+    body: { clearApiKey: true, endpointBaseUrl: null },
+  });
+
   section('16e. Vision — reading a photo of student work');
   const visionCaps = await api('/api/ai/vision/capabilities', { token: naveen.token });
   ok(visionCaps.status === 200, 'vision capabilities are reported');
