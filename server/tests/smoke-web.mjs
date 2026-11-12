@@ -137,9 +137,10 @@ const run = async () => {
   const sessionId = started.body.session.id;
 
   const turn = await call(`/tutor/sessions/${sessionId}/messages`, { token: student, method: 'POST', body: { content: 'I think int is 8 bytes on every JVM.', signal: { wrongAnswer: true } } });
+  const replyText = typeof turn.body?.message?.content === 'string' ? turn.body.message.content : '';
   check(
-    `a tutor turn returns the reply + intelligence block (HTTP ${turn.status}, keys: ${Object.keys(turn.body || {}).join('/') || 'none'}${turn.body?.blocked ? ' · blocked' : ''}${turn.body?.error ? ` · ${turn.body.error.code || turn.body.error.message}` : ''})`,
-    turn.status === 200 && turn.body.message?.content?.length > 20 && turn.body.intelligence,
+    `a tutor turn returns the reply + intelligence block (HTTP ${turn.status}, reply ${replyText.length} chars: ${JSON.stringify(replyText.slice(0, 70))}, intelligence: ${turn.body?.intelligence ? 'yes' : 'no'}, mocked: ${turn.body?.ai?.simulated ?? '?'})`,
+    turn.status === 200 && replyText.length > 20 && Boolean(turn.body.intelligence),
   );
   // Guard the property rather than dereferencing it: this suite drives dozens of
   // AI-backed flows as one user, so a 429 here is about the rate limit, not about
