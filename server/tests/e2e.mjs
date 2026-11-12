@@ -608,6 +608,85 @@ async function main() {
   const afterTransfer = await api(`/api/classrooms/${state.mathClass.id}`, { token: naveen.token });
   ok(afterTransfer.status === 200 && afterTransfer.body.membership.role === 'co_owner', 'previous owner becomes co-owner after transfer');
 
+  section('16b. Per-model endpoints (each NIM model has its own API surface)');
+  const endpoints = await api('/api/ai/admin/models/endpoints', { token: admin.token });
+  ok(endpoints.status === 200, 'admin can read resolved endpoints for every model');
+  const byId = Object.fromEntries(endpoints.body.endpoints.map((e) => [e.modelId, e]));
+  ok(byId['nvidia/nemotron-3.5-lightning-30b-a3b']?.path === '/chat/completions',
+    'chat model resolves to /chat/completions');
+  ok(byId['nvidia/nemotron-3.5-embed-1b']?.path === '/embeddings',
+    'embedding model resolves to /embeddings, not /chat/completions');
+  ok(byId['nvidia/nemotron-3.5-rerank-8b']?.path === '/ranking',
+    'rerank model resolves to the NeMo /ranking surface');
+  ok(endpoints.body.endpoints.every((e) => e.url.startsWith('http')), 'every model resolves to an absolute URL');
+  ok(endpoints.body.endpoints.every((e) => typeof e.configured === 'boolean'), 'each model reports whether it has credentials');
+  ok(!JSON.stringify(endpoints.body).includes('nvapi-'), 'no key material leaks through the endpoint view');
+
+  const staffEndpoints = await api('/api/ai/admin/models/endpoints', { token: naveen.token });
+  ok(staffEndpoints.status === 403, 'non-admin cannot read the endpoint map');
+
+  // A model can be pointed at its own host, its own path and its own key.
+  const override = await api('/api/ai/admin/models/nvidia/nemotron-3.5-embed-1b', {
+    method: 'PATCH',
+    token: admin.token,
+    body: {
+      endpointBaseUrl: 'https://nim.internal.example/v1',
+      endpointPath: '/v1/embeddings',
+      apiKey: 'nvapi-per-model-test-key-0001',
+    },
+  });
+  ok(override.status === 200, 'admin can give one model its own host, path and key');
+  const afterOverride = await api('/api/ai/admin/models/endpoints', { token: admin.token });
+  const embedAfter = afterOverride.body.endpoints.find((e) => e.modelId === 'nvidia/nemotron-3.5-embed-1b');
+  ok(embedAfter.url === 'https://nim.internal.example/v1/embeddings', `per-model override is applied and normalised (${embedAfter.url})`);
+  ok(embedAfter.overridesGlobal === true, 'override is surfaced as overriding the global provider');
+  ok(embedAfter.apiKeySource === 'model', 'the model reports using its own credentials');
+  ok(!JSON.stringify(afterOverride.body).includes('nvapi-per-model-test-key-0001'), 'model key is never returned in clear text');
+
+  const badUrl = await api('/api/ai/admin/models/nvidia/nemotron-3.5-embed-1b', {
+    method: 'PATCH',
+    token: admin.token,
+    body: { endpointBaseUrl: 'not-a-url' },
+  });
+  ok(badUrl.status >= 400, 'an invalid endpoint URL is rejected');
+
+  await api('/api/ai/admin/models/nvidia/nemotron-3.5-embed-1b', {
+    method: 'PATCH',
+    token: admin.token,
+    body: { endpointBaseUrl: null, endpointPath: null, clearApiKey: true },
+  });
+  const restoredEndpoints = await api('/api/ai/admin/models/endpoints', { token: admin.token });
+  ok(
+    restoredEndpoints.body.endpoints.find((e) => e.modelId === 'nvidia/nemotron-3.5-embed-1b').url.endsWith('/embeddings'),
+    'clearing an override restores the global endpoint',
+  );
+
+  section('16c. Chat renders visual explanations alongside prose');
+  // Starting a session ends any prior active session in that classroom, so this
+  // section opens its own instead of reusing one from earlier.
+  const visualSession = await api('/api/tutor/sessions', {
+    method: 'POST',
+    token: naveen.token,
+    body: { classroomId: javaClass.id, conceptId: concept.id, mode: 'learn' },
+  });
+  ok(visualSession.status === 201, 'a fresh session starts for the visual check');
+  const visualTurn = await api(`/api/tutor/sessions/${visualSession.body.session.id}/messages`, {
+    method: 'POST',
+    token: naveen.token,
+    body: { content: 'I still do not see the difference between a list and a tuple.' },
+  });
+  ok(visualTurn.status === 200 || visualTurn.status === 201, 'tutor replies to a confusion about two similar types');
+  const visuals = visualTurn.body.message?.meta?.visuals;
+  ok(Array.isArray(visuals) && visuals.length > 0, 'the reply carries at least one visual block');
+  ok(visuals.every((v) => ['flow', 'compare', 'steps', 'code', 'hierarchy', 'table'].includes(v.kind)),
+    'every block is a renderable kind the client understands');
+  ok(['model', 'generated'].includes(visualTurn.body.message?.meta?.visualsSource),
+    'the source of the visual is recorded (model or deterministic)');
+  const readBack = await api(`/api/tutor/sessions/${visualSession.body.session.id}`, { token: naveen.token });
+  const persisted = readBack.body.messages.find((m) => m.id === visualTurn.body.message?.id);
+  ok(Array.isArray(persisted?.meta?.visuals) && persisted.meta.visuals.length === visuals.length,
+    'visuals are persisted with the message, so history re-renders them');
+
   section('17. Cross-classroom data isolation under attack');
   const foreignConcept = mlProfile.body.mastery[0]?.conceptId;
   const attack = await api('/api/tutor/sessions', {

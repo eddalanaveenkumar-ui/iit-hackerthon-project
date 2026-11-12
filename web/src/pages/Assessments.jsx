@@ -14,7 +14,8 @@ import {
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { timeAgo } from '../lib/format';
-import { Badge, EmptyState, ErrorBanner, LoadingBlock, Modal, ProgressBar, Spinner, Tabs, cx, useToast } from '../components/ui';
+import { Badge, EmptyState, ErrorBanner, LoadingBlock, Modal, ProgressBar, Spinner, Tabs, useToast } from '../components/ui';
+import { AnswerSheet } from '../components/AnswerSheet';
 
 const KIND_LABELS = {
   topic_quiz: 'Topic quiz',
@@ -335,76 +336,36 @@ function AttemptModal({ classroomId, detail, onClose, onSubmitted, result, onClo
     }
   };
 
-  const answered = Object.keys(answers).filter((k) => answers[k] !== '' && answers[k] !== undefined && answers[k] !== null).length;
-
   return (
-    <Modal
-      open
-      onClose={onClose}
-      width="max-w-3xl"
-      title={detail.assessment.title}
-      description={`${KIND_LABELS[detail.assessment.kind]} · ${questions.length} questions · ~${detail.assessment.durationMinutes} minutes`}
-      footer={
-        <>
-          <span className="mr-auto text-xs text-slate-500 dark:text-slate-400">
-            {answered}/{questions.length} answered
-          </span>
-          <button onClick={onClose} className="btn-secondary">
-            Close
-          </button>
-          <button onClick={submit} className="btn-primary" disabled={busy || answered === 0}>
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Submit
-          </button>
-        </>
-      }
-    >
-      <div className="space-y-4">
-        <ErrorBanner message={error} onDismiss={() => setError('')} />
-        {questions.map((q, i) => (
-          <div key={q.id} className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
-            <div className="flex items-start justify-between gap-2">
-              <p className="text-sm font-medium text-slate-800 dark:text-slate-100">
-                {i + 1}. {q.prompt}
-              </p>
-              <Badge tone={q.difficulty === 'hard' ? 'danger' : q.difficulty === 'easy' ? 'success' : 'warning'}>{q.difficulty}</Badge>
-            </div>
-            {q.type === 'multiple_choice' ? (
-              <div className="mt-2 space-y-1.5">
-                {(q.options || []).map((opt, idx) => (
-                  <label
-                    key={idx}
-                    className={cx(
-                      'flex cursor-pointer items-start gap-2 rounded-lg border p-2 text-sm transition-colors',
-                      answers[q.id] === idx
-                        ? 'border-brand-500 bg-brand-50/60 dark:border-brand-500 dark:bg-brand-950/30'
-                        : 'border-slate-200 hover:border-slate-300 dark:border-slate-700',
-                    )}
-                  >
-                    <input
-                      type="radio"
-                      className="mt-0.5 accent-brand-600"
-                      name={`q-${q.id}`}
-                      checked={answers[q.id] === idx}
-                      onChange={() => setAnswers((a) => ({ ...a, [q.id]: idx }))}
-                    />
-                    <span className="text-slate-700 dark:text-slate-200">{opt}</span>
-                  </label>
-                ))}
-              </div>
-            ) : (
-              <textarea
-                className="input mt-2"
-                rows={3}
-                placeholder="Write your answer…"
-                value={answers[q.id] || ''}
-                onChange={(e) => setAnswers((a) => ({ ...a, [q.id]: e.target.value }))}
-              />
-            )}
-          </div>
-        ))}
-      </div>
+    <Modal open onClose={onClose} width="max-w-4xl" title="" bare>
+      <ErrorBanner message={error} onDismiss={() => setError('')} />
+      <AnswerSheet
+        title={detail.assessment.title}
+        level={difficultyLevel(questions)}
+        marks={questions.length}
+        minutes={detail.assessment.durationMinutes}
+        questions={questions}
+        answers={answers}
+        onAnswer={(qid, value) => setAnswers((a) => ({ ...a, [qid]: value }))}
+        onSubmit={submit}
+        submitting={busy}
+        footer={
+          <p className="mt-2 text-center text-[11px] text-slate-400">
+            {KIND_LABELS[detail.assessment.kind] || 'Assessment'} · close without submitting to return later
+          </p>
+        }
+      />
     </Modal>
   );
+}
+
+/** Derive a single level label from the per-question difficulties. */
+function difficultyLevel(questions) {
+  const order = { easy: 1, medium: 2, hard: 3 };
+  const avg = questions.reduce((sum, q) => sum + (order[q.difficulty] || 2), 0) / (questions.length || 1);
+  if (avg < 1.7) return 'Beginner';
+  if (avg < 2.4) return 'Intermediate';
+  return 'Advanced';
 }
 
 function ResultModal({ result, onClose }) {

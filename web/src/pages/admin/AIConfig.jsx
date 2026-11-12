@@ -17,7 +17,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { api } from '../../lib/api';
-import { Badge, ErrorBanner, LoadingBlock, ProgressBar, StatCard, Switch, Tabs, cx, useToast } from '../../components/ui';
+import { Badge, ErrorBanner, LoadingBlock, Modal, ProgressBar, StatCard, Switch, Tabs, cx, useToast } from '../../components/ui';
 import { UsageLineChart } from '../../components/charts';
 import { timeAgo } from '../../lib/format';
 
@@ -247,6 +247,23 @@ function ProviderTab({ data, onSaved, toast }) {
 function ModelsTab({ data, onChanged, toast, busy, setBusy }) {
   const [verifying, setVerifying] = useState(false);
   const [result, setResult] = useState(null);
+  const [endpoints, setEndpoints] = useState(null);
+  const [editing, setEditing] = useState(null);
+
+  const loadEndpoints = useCallback(async () => {
+    try {
+      const res = await api('/ai/admin/models/endpoints');
+      setEndpoints(res);
+    } catch (e) {
+      toast.error(e.message);
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    loadEndpoints();
+  }, [loadEndpoints]);
+
+  const endpointFor = (modelId) => endpoints?.endpoints?.find((e) => e.modelId === modelId);
 
   const verify = async () => {
     setVerifying(true);
@@ -305,8 +322,8 @@ function ModelsTab({ data, onChanged, toast, busy, setBusy }) {
               <tr>
                 <th>Model</th>
                 <th>Category</th>
+                <th>Endpoint</th>
                 <th>Availability</th>
-                <th>Capabilities</th>
                 <th>Enabled</th>
               </tr>
             </thead>
@@ -331,13 +348,10 @@ function ModelsTab({ data, onChanged, toast, busy, setBusy }) {
                     </span>
                   </td>
                   <td>
-                    <div className="flex max-w-[220px] flex-wrap gap-1">
-                      {m.capabilities.slice(0, 4).map((c) => (
-                        <span key={c} className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                          {c}
-                        </span>
-                      ))}
-                    </div>
+                    <EndpointCell
+                      endpoint={endpointFor(m.modelId)}
+                      onEdit={() => setEditing({ ...m, endpoint: endpointFor(m.modelId) })}
+                    />
                   </td>
                   <td>
                     <Switch checked={m.enabled} onChange={(v) => toggle(m.modelId, v)} label="" disabled={busy === m.modelId} />
@@ -348,7 +362,235 @@ function ModelsTab({ data, onChanged, toast, busy, setBusy }) {
           </table>
         </div>
       </div>
+
+      <p className="px-1 text-[11px] text-slate-500 dark:text-slate-400">
+        Every NVIDIA NIM model family is served on its own route: chat models on{' '}
+        <code className="rounded bg-slate-100 px-1 dark:bg-slate-800">/chat/completions</code>, embeddings on{' '}
+        <code className="rounded bg-slate-100 px-1 dark:bg-slate-800">/embeddings</code> and rerankers on{' '}
+        <code className="rounded bg-slate-100 px-1 dark:bg-slate-800">/ranking</code>. A model can be pointed at a
+        different host, path or key without affecting the others, and without a restart.
+      </p>
+
+      <EndpointModal
+        model={editing}
+        open={Boolean(editing)}
+        onClose={() => setEditing(null)}
+        onSaved={() => {
+          setEditing(null);
+          loadEndpoints();
+          onChanged();
+        }}
+        toast={toast}
+      />
     </div>
+  );
+}
+
+function EndpointCell({ endpoint, onEdit }) {
+  if (!endpoint) {
+    return <span className="text-[11px] text-slate-400">Resolving…</span>;
+  }
+  return (
+    <div className="min-w-0">
+      <p className="font-mono text-[10.5px] leading-tight text-slate-600 dark:text-slate-300">{endpoint.path}</p>
+      <div className="mt-1 flex flex-wrap items-center gap-1">
+        {endpoint.configured ? (
+          <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300">
+            {endpoint.apiKeySource === 'model' ? 'own key' : 'global key'}
+          </span>
+        ) : (
+          <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-950/50 dark:text-amber-300">
+            no key
+          </span>
+        )}
+        {endpoint.overridesGlobal ? (
+          <span className="rounded bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 dark:bg-violet-950/50 dark:text-violet-300">
+            overridden
+          </span>
+        ) : null}
+        <button onClick={onEdit} className="text-[10px] font-medium text-brand-600 hover:underline dark:text-brand-400">
+          Edit
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Per-model endpoint editor.
+ *
+ * Blank fields inherit the global provider, so the common case (one NVIDIA key
+ * for everything) needs no input at all. Filling them in is how a model gets its
+ * own host, path or key.
+ */
+function EndpointModal({ model, open, onClose, onSaved, toast }) {
+  const [baseUrl, setBaseUrl] = useState('');
+  const [path, setPath] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!model) return;
+    setBaseUrl(model.endpointBaseUrl || '');
+    setPath(model.endpointPath || '');
+    setApiKey('');
+    setTestResult(null);
+    setError('');
+  }, [model]);
+
+  if (!model) return null;
+
+  const defaults = {
+    chat: '/chat/completions',
+    reasoning: '/chat/completions',
+    coding: '/chat/completions',
+    safety: '/chat/completions',
+    parse: '/chat/completions',
+    embedding: '/embeddings',
+    rerank: '/ranking',
+  };
+  const resolvedUrl = `${(baseUrl || model.endpoint?.baseUrl || '').replace(/\/+$/, '')}${path || defaults[model.category] || '/chat/completions'}`;
+
+  const save = async () => {
+    setSaving(true);
+    setError('');
+    try {
+      const body = {
+        endpointBaseUrl: baseUrl || null,
+        endpointPath: path || null,
+      };
+      if (apiKey.trim()) body.apiKey = apiKey.trim();
+      await api(`/ai/admin/models/${encodeURIComponent(model.modelId)}`, { method: 'PATCH', body });
+      toast.success(`${model.modelId} endpoint saved`);
+      onSaved();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const clearKey = async () => {
+    setSaving(true);
+    setError('');
+    try {
+      await api(`/ai/admin/models/${encodeURIComponent(model.modelId)}`, { method: 'PATCH', body: { clearApiKey: true } });
+      toast.success('Per-model key cleared — this model uses the global key again');
+      onSaved();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const test = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const res = await api('/ai/admin/models/endpoints/test', { method: 'POST', body: { modelId: model.modelId } });
+      setTestResult(res);
+    } catch (e) {
+      setTestResult({ ok: false, detail: e.message });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title="Model endpoint" description={model.modelId} width="max-w-xl">
+      <div className="space-y-3">
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5 dark:border-slate-700 dark:bg-slate-800/50">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Resolved URL</p>
+          <p className="mt-1 break-all font-mono text-[11.5px] text-slate-700 dark:text-slate-200">{resolvedUrl}</p>
+          <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+            Category <span className="font-medium">{model.category}</span> · method{' '}
+            <span className="font-medium">{model.endpoint?.method || 'chat'}</span>
+          </p>
+        </div>
+
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-slate-700 dark:text-slate-200">Base URL (optional)</span>
+          <input
+            className="input"
+            placeholder="https://integrate.api.nvidia.com/v1"
+            value={baseUrl}
+            onChange={(e) => setBaseUrl(e.target.value)}
+          />
+          <span className="mt-1 block text-[11px] text-slate-400">Leave blank to inherit the global provider base URL.</span>
+        </label>
+
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-slate-700 dark:text-slate-200">Endpoint path (optional)</span>
+          <input
+            className="input font-mono"
+            placeholder={defaults[model.category] || '/chat/completions'}
+            value={path}
+            onChange={(e) => setPath(e.target.value)}
+          />
+          <span className="mt-1 block text-[11px] text-slate-400">
+            Leave blank to use the correct default for a {model.category} model.
+          </span>
+        </label>
+
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-slate-700 dark:text-slate-200">API key (optional)</span>
+          <input
+            className="input font-mono"
+            type="password"
+            placeholder={model.apiKeyPreview || 'nvapi-…'}
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            autoComplete="off"
+          />
+          <span className="mt-1 block text-[11px] text-slate-400">
+            Encrypted at rest with AES-256-GCM and never returned to the browser. Leave blank to inherit the global key.
+          </span>
+        </label>
+
+        {error ? <p className="text-xs text-rose-600 dark:text-rose-400">{error}</p> : null}
+
+        {testResult ? (
+          <div
+            className={cx(
+              'rounded-lg border p-2.5 text-[11.5px]',
+              testResult.ok
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200'
+                : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200',
+            )}
+          >
+            <p className="font-medium">{testResult.ok ? 'Endpoint responded' : 'Endpoint not reachable'}</p>
+            <p className="mt-0.5 break-all">{testResult.detail}</p>
+            {testResult.endpoint ? <p className="mt-1 font-mono text-[10.5px] opacity-80">{testResult.endpoint}</p> : null}
+            {testResult.sample ? <p className="mt-1 italic opacity-80">“{testResult.sample}”</p> : null}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex gap-2">
+          <button onClick={test} className="btn-secondary btn-sm" disabled={testing || saving}>
+            {testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} Test
+          </button>
+          {model.apiKeyPreview ? (
+            <button onClick={clearKey} className="btn-ghost btn-sm text-rose-600" disabled={saving}>
+              Clear saved key
+            </button>
+          ) : null}
+        </div>
+        <div className="flex gap-2">
+          <button onClick={onClose} className="btn-secondary btn-sm">
+            Cancel
+          </button>
+          <button onClick={save} className="btn-primary btn-sm" disabled={saving}>
+            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} Save
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

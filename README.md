@@ -79,10 +79,26 @@ Everything lives in one `.env` at the repository root (read by `server/`).
 - Upload **PDF / DOCX / PPTX** and get a parsed `Subject → Unit → Topic → Concept → Subtopic` tree, or build it manually.
 - Documents are chunked and indexed so tutor replies can cite real syllabus material.
 
+### The interface is a chat
+The landing surface is a conversation, not a dashboard. Everything is reached by typing, so
+there is one interaction model instead of a navigation tree plus wizards.
+
+- `/start` walks the learner through classroom → subject → unit → concept → mode
+  (**learn / test / practise / continue**) entirely inside the thread.
+- `/classrooms`, `/practice`, `/assessments`, `/progress`, `/settings` open the other surfaces.
+- `/help` lists every command. Press `/` for a command palette.
+- Only account and admin surfaces sit behind the avatar menu.
+
 ### The learning flow
-- Guided `/start` wizard: classroom → subject → unit → concept → mode (**learn / test / practise / continue**).
 - Every session starts a **fresh chat** without deleting prior records, so history stays intact.
 - **Progressive scaffolding** — support level moves between `independent`, `supported` and `guided` based on evidence (repeated mistakes, wrong streaks, hint usage, unaided correct answers).
+- **Visual explanation** — tutor replies carry rendered diagrams (`flow`, `compare`, `steps`, `code`,
+  `hierarchy`, `table`) next to the prose, so a concept can be seen as well as read. Blocks are
+  validated server-side and rendered by fixed components, never as raw HTML. When no model key is
+  configured, a deterministic generator builds them from the syllabus, so the feature never degrades
+  into "unavailable".
+- **Assessments** render as a document-style answer sheet: level/marks/time header, live
+  answered counter, one numbered question per block, objective vs theory chips, answers saved as you type.
 - Student-triggered assessments, plus AI-triggered recommendations that are **optional and postponable**.
 - **Monaco** practice workspace with language-aware editing, run/submit against a sandboxed evaluator, hidden tests, static analysis, copy-paste detection and an AI code review.
 
@@ -92,6 +108,14 @@ Detected from real interactions — answers, assessment results and code submiss
 - knowledge gaps, misconceptions, practical difficulties, repeated errors, learning speed, independence, topic mastery with trend, and at-risk flags.
 - Each **classroom keeps its own isolated learning profile**, so progress in one subject never leaks into another.
 - Dashboards for the learner, the classroom owner and each teacher.
+
+### AI configuration (section 17)
+- Provider-independent adapters with a local deterministic fallback, so learning never blocks.
+- **Every model is configured individually** — its own base URL, endpoint path and API key, or blank
+  to inherit the global NVIDIA key. Keys are encrypted at rest and never returned to the browser.
+- Endpoint paths are derived from the model's capability, because NIM serves different surfaces:
+  chat models on `/chat/completions`, embeddings on `/embeddings`, rerankers on `/ranking`.
+- Admin-only. Applies without a restart, and each model can be tested from the panel.
 
 ### Chat privacy
 - Conversations are **private by default**.

@@ -27,8 +27,38 @@ Return ONLY valid JSON with this exact shape:
   "nextPrompt": "one question the student should answer next",
   "assessmentRecommendation": { "recommend": true, "kind": "topic_quiz|conceptual|practical", "reason": "..." },
   "difficultyShift": "simpler|steady|harder",
-  "followUpQuestion": "string"
-}`;
+  "followUpQuestion": "string",
+  "visuals": [
+    {
+      "kind": "flow|compare|steps|code|hierarchy|table",
+      "title": "short heading",
+      "caption": "one line explaining what the student should notice",
+      "nodes": [{ "label": "stage", "detail": "short gloss" }],
+      "loop": false,
+      "columns": [{ "name": "Option A", "items": ["point"] }],
+      "steps": [{ "label": "action", "detail": "why" }],
+      "code": "annotated sample",
+      "language": "python",
+      "annotations": ["what to notice"],
+      "root": { "label": "root", "children": [{ "label": "child" }] },
+      "headers": ["a", "b"],
+      "rows": [["1", "2"]]
+    }
+  ]
+}
+
+VISUAL EXPLANATION
+The platform renders your "visuals" array as diagrams next to your prose, so the student
+can SEE the idea as well as read it. Rules:
+- Emit 1-2 blocks. Only include the fields that the chosen kind needs.
+- "flow" for sequences, lifecycles and pipelines (minimum 2 nodes).
+- "compare" for "X vs Y" distinctions — the highest-value visual for confusion.
+- "steps" for procedures and algorithms (minimum 2 steps).
+- "code" for a short, runnable-fragment-sized example with 1-3 annotations.
+- "hierarchy" for structure and taxonomies.
+- "table" for attribute-by-attribute comparison of 2+ things.
+- Keep labels under 8 words. The visual must be true to the syllabus — never invent
+  facts to fill a diagram. Omit visuals entirely if a diagram would not help.`;
 
 const GAP_SYSTEM = `You are LearnMate's Knowledge Gap Detection Engine. You infer what a student actually
 understands from EVIDENCE ONLY: their answers, explanations, code, quiz results and attempt history.

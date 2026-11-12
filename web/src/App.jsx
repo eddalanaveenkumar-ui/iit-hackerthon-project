@@ -6,11 +6,10 @@ import { Spinner } from './components/ui';
 const Login = lazy(() => import('./pages/Login'));
 const Register = lazy(() => import('./pages/Register'));
 const Layout = lazy(() => import('./components/Layout'));
-const Dashboard = lazy(() => import('./pages/Dashboard'));
+const CommandChat = lazy(() => import('./pages/CommandChat'));
 const Classrooms = lazy(() => import('./pages/Classrooms'));
 const CreateClassroom = lazy(() => import('./pages/CreateClassroom'));
 const ClassroomDetail = lazy(() => import('./pages/ClassroomDetail'));
-const StartLearning = lazy(() => import('./pages/StartLearning'));
 const TutorSession = lazy(() => import('./pages/TutorSession'));
 const Practice = lazy(() => import('./pages/Practice'));
 const Assessments = lazy(() => import('./pages/Assessments'));
@@ -64,8 +63,9 @@ export default function App() {
             </RequireAuth>
           }
         >
-          <Route index element={<Dashboard />} />
-          <Route path="start" element={<StartLearning />} />
+          <Route index element={<CommandChat />} />
+          {/* /start is a command inside the chat, not a route: keep the old URL working. */}
+          <Route path="start" element={<Navigate to="/app" replace />} />
 
           <Route path="classrooms" element={<Classrooms />} />
           <Route path="classrooms/new" element={<CreateClassroom />} />
