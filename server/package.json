@@ -9,6 +9,7 @@
     "start": "node src/index.js",
     "seed": "node src/seed/seed.js",
     "test:e2e": "node tests/run-e2e.mjs",
+    "test:migration": "node tests/migration.mjs",
     "test:smoke": "node tests/smoke-web.mjs"
   },
   "dependencies": {

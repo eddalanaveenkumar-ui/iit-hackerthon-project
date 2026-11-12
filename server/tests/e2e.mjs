@@ -504,26 +504,42 @@ async function main() {
   ok(staffDenied.status === 403, 'non-admin cannot read global AI provider settings');
   const adminOverview = await api('/api/ai/admin/overview', { token: admin.token });
   ok(adminOverview.status === 200, 'admin reads the AI overview');
-  ok(adminOverview.body.models.length === 8, `all 8 registered NVIDIA models present (${adminOverview.body.models.length})`);
+  // Only models that are actually callable are registered. Two seed entries
+  // (content-safety-4b, qwen2.5-coder-32b) are unavailable on NVIDIA's free
+  // endpoint and are retired rather than offered as 404s.
+  ok(adminOverview.body.models.length === 6, `all 6 callable NVIDIA models present (${adminOverview.body.models.length})`);
   ok(adminOverview.body.routing.length >= 8, 'task routing table present');
   ok(adminOverview.body.features.length >= 10, 'AI feature flags present');
   ok(!JSON.stringify(adminOverview.body).includes('sk-'), 'no API key material in admin responses');
   const modelIds = adminOverview.body.models.map((m) => m.modelId);
-  ok(modelIds.includes('nvidia/nemotron-3.5-lightning-30b-a3b') && modelIds.includes('qwen/qwen2.5-coder-32b-instruct'),
+  ok(modelIds.includes('nvidia/nemotron-3.5-lightning-30b-a3b') && modelIds.includes('nvidia/nemotron-3-ultra-550b-a55b'),
     'registered model IDs match the requirements');
+  ok(modelIds.includes('deepseek-ai/deepseek-v4.1-flash'), 'the multimodal fallback uses its real model id (v4.1-flash)');
+  ok(!modelIds.includes('qwen/qwen2.5-coder-32b-instruct'), 'the unavailable Qwen coder is not offered');
+  ok(!modelIds.includes('nvidia/nemotron-content-safety-reasoning-4b'), 'the unavailable safety model is not offered');
+  ok(adminOverview.body.models.filter((m) => m.retired).length === 0, 'retired models are not listed as live');
+
+  // Every routed model must exist, or the first call for that task 404s.
+  const liveIds = new Set(modelIds);
+  const dangling = adminOverview.body.routing.filter((r) => r.model && !liveIds.has(r.model));
+  ok(dangling.length === 0, `no task routes to a model that does not exist (${dangling.map((d) => d.task).join(', ') || 'none'})`);
 
   const verify = await api('/api/ai/admin/models/verify', { method: 'POST', token: admin.token });
   ok(verify.status === 200 && Array.isArray(verify.body.models), 'model availability is verified against the catalogue (never assumed)');
   ok(verify.body.models.every((m) => ['available', 'unavailable', 'unknown'].includes(m.availability)), 'verification returns explicit availability states');
 
+  // Pick a model other than the one tutoring already uses, so the test is about
+  // re-routing rather than about a hard-coded id.
+  const tutoringNow = adminOverview.body.routing.find((r) => r.task === 'tutoring').model;
+  const rerouteTarget = modelIds.find((id) => id !== tutoringNow);
   const reroute = await api('/api/ai/admin/routing/tutoring', {
     method: 'PATCH',
     token: admin.token,
-    body: { model: 'deepseek-ai/deepseek-v4-flash' },
+    body: { model: rerouteTarget },
   });
   ok(reroute.status === 200, 'admin re-routes a task to another model');
   const afterReroute = await api('/api/ai/admin/overview', { token: admin.token });
-  ok(afterReroute.body.routing.find((r) => r.task === 'tutoring').model === 'deepseek-ai/deepseek-v4-flash', 'routing change is live immediately');
+  ok(afterReroute.body.routing.find((r) => r.task === 'tutoring').model === rerouteTarget, 'routing change is live immediately');
   await api('/api/ai/admin/routing/tutoring', { method: 'PATCH', token: admin.token, body: { model: 'nvidia/nemotron-3.5-lightning-30b-a3b' } });
 
   const disable = await api('/api/ai/admin/features/assessment_generation', { method: 'PATCH', token: admin.token, body: { enabled: false } });
@@ -686,6 +702,38 @@ async function main() {
   const persisted = readBack.body.messages.find((m) => m.id === visualTurn.body.message?.id);
   ok(Array.isArray(persisted?.meta?.visuals) && persisted.meta.visuals.length === visuals.length,
     'visuals are persisted with the message, so history re-renders them');
+
+  section('16e. Vision — reading a photo of student work');
+  const visionCaps = await api('/api/ai/vision/capabilities', { token: naveen.token });
+  ok(visionCaps.status === 200, 'vision capabilities are reported');
+  ok(visionCaps.body.models.length === 1, `exactly one vision model is registered (${visionCaps.body.models.length})`);
+  ok(visionCaps.body.models[0].modelId === 'deepseek-ai/deepseek-v4.1-flash', 'the multimodal DeepSeek model is the vision path');
+  ok(visionCaps.body.mimeTypes.includes('image/png') && visionCaps.body.maxBytes > 0, 'accepted image types and size limit are published');
+
+  // A route only qualifies if its primary model can actually see.
+  const routedVision = visionCaps.body.tasks;
+  ok(Array.isArray(routedVision) && routedVision.every((t) => t !== 'tutoring'), 'vision routes are capability-derived, not assumed');
+
+  const tinyPng = `data:image/png;base64,${Buffer.from('x'.repeat(80)).toString('base64')}`;
+
+  // An unauthenticated caller must not be able to spend tokens.
+  const visionAnon = await api('/api/ai/vision/read', { method: 'POST', body: { image: tinyPng } });
+  ok(visionAnon.status === 401, 'vision requires authentication');
+
+  // Not an image at all.
+  const notAnImage = await api('/api/ai/vision/read', { method: 'POST', token: naveen.token, body: { image: 'hello there'.repeat(10) } });
+  ok(notAnImage.status === 400 && notAnImage.body.error, 'a non-image payload is rejected with a reason');
+
+  // SVG is excluded: it can carry script and is not a photo of work.
+  const svg = `data:image/svg+xml;base64,${Buffer.from('<svg/>').toString('base64')}`;
+  const svgRes = await api('/api/ai/vision/read', { method: 'POST', token: naveen.token, body: { image: svg } });
+  ok(svgRes.status === 400, 'SVG is refused as an image type');
+
+  // With no usable key the endpoint must say so — never invent a reading.
+  const noKey = await api('/api/ai/vision/read', { method: 'POST', token: naveen.token, body: { image: tinyPng, prompt: 'why is my loop wrong?' } });
+  ok([502, 503].includes(noKey.status), 'without a key vision fails loudly rather than guessing');
+  ok(!noKey.body.reading, 'no fabricated transcription is returned');
+  ok(/key|credential|available/i.test(noKey.body.error || ''), `the failure explains itself ("${String(noKey.body.error).slice(0, 60)}")`);
 
   section('16d. Chat history (sidebar archive)');
   const history = await api('/api/tutor/sessions?limit=10', { token: naveen.token });

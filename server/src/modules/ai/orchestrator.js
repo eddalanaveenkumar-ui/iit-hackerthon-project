@@ -162,7 +162,10 @@ function costOf(model, usage) {
  * Core JSON-producing AI call.
  * @returns {{ data: any, meta: { provider, model, latencyMs, tokens, cached, simulated, fallbackUsed } }}
  */
-export async function runJsonTask(task, { messages, meta = {}, feature, userId, classroomId, cacheable = false, signal } = {}) {
+export async function runJsonTask(
+  task,
+  { messages, meta = {}, feature, userId, classroomId, cacheable = false, signal, pinModel } = {},
+) {
   const feat = feature || TASK_FEATURE_MAP[task];
   if (feat && !(await isFeatureEnabled(feat))) {
     return {
@@ -177,9 +180,16 @@ export async function runJsonTask(task, { messages, meta = {}, feature, userId, 
   const provider = getProvider(runtime);
 
   const models = [];
-  if (primary) models.push(primary.modelId);
+  // A pinned model bypasses the task route: some payloads (an image, say) can
+  // only be handled by a model with the matching capability, and silently
+  // sending them to the routed model would produce a garbage answer rather than
+  // an error. The pin still respects the registry — an unknown or disabled id
+  // falls through to the normal route.
+  const pinned = pinModel ? (await getConfigBundle()).models.find((m) => m.modelId === pinModel && m.enabled) : null;
+  if (pinned) models.push(pinned.modelId);
+  else if (primary) models.push(primary.modelId);
   else if (route?.model) models.push(route.model);
-  if (fallback && fallback.modelId && fallback.modelId !== models[0]) models.push(fallback.modelId);
+  if (!pinned && fallback && fallback.modelId && fallback.modelId !== models[0]) models.push(fallback.modelId);
 
   const override = runtime.taskOverrides?.[task] || {};
   const modelParamsFor = (modelId) => {

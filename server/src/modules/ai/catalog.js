@@ -63,37 +63,40 @@ export const MODEL_REGISTRY_SEED = [
   },
   {
     provider: NVIDIA_PROVIDER,
-    modelId: 'nvidia/nemotron-content-safety-reasoning-4b',
-    displayName: 'Nemotron Content Safety Reasoning 4B',
-    category: 'safety',
-    capabilities: ['content_moderation', 'safety_reasoning'],
-    params: { temperature: 0, maxTokens: 512 },
-    pricingPer1k: { input: 0.00004, output: 0.00006 },
-    notes: 'Moderates student input and generated tutoring content.',
-  },
-  {
-    provider: NVIDIA_PROVIDER,
-    modelId: 'qwen/qwen2.5-coder-32b-instruct',
-    displayName: 'Qwen 2.5 Coder 32B Instruct',
-    category: 'coding',
-    capabilities: ['code_generation', 'code_analysis', 'debugging', 'structured_json'],
-    params: { temperature: 0.2, topP: 0.9, maxTokens: 1800 },
-    pricingPer1k: { input: 0.0004, output: 0.0012 },
-    notes: 'Programming analysis, exercise generation and misconception spotting in code.',
-  },
-  {
-    provider: NVIDIA_PROVIDER,
-    modelId: 'deepseek-ai/deepseek-v4-flash',
-    displayName: 'DeepSeek V4 Flash',
+    modelId: 'deepseek-ai/deepseek-v4.1-flash',
+    displayName: 'DeepSeek V4.1 Flash',
     category: 'chat',
-    capabilities: ['chat', 'fast', 'structured_json', 'fallback'],
+    capabilities: ['chat', 'fast', 'structured_json', 'vision', 'fallback'],
     params: { temperature: 0.5, topP: 0.95, maxTokens: 1600 },
     pricingPer1k: { input: 0.0002, output: 0.0006 },
-    notes: 'Fast general model used as an alternate / fallback path.',
+    notes: 'Fast general model used as an alternate / fallback path. Multimodal: accepts image_url parts, so it can read a photo of a whiteboard or a screenshot of broken code.',
   },
 ];
 
 export const DEFAULT_MODEL_REGISTRY = MODEL_REGISTRY_SEED;
+
+/**
+ * Models that were in the seed but are NOT callable on NVIDIA's free endpoint.
+ *
+ * Kept so that an existing database is cleaned up on boot instead of leaving
+ * dead routes behind, and so the admin console can explain why something is
+ * gone rather than silently dropping it.
+ */
+export const RETIRED_MODELS = {
+  'nvidia/nemotron-content-safety-reasoning-4b':
+    'Not available on the NVIDIA free endpoint. Moderation now routes to Nemotron 3.5 Lightning.',
+  'qwen/qwen2.5-coder-32b-instruct':
+    'Not available on the NVIDIA free endpoint. Code analysis and practical detection now route to Nemotron 3 Ultra.',
+  'deepseek-ai/deepseek-v4-flash':
+    'Superseded by deepseek-ai/deepseek-v4.1-flash (same family, multimodal). Routes were migrated automatically.',
+};
+
+/** Seed id -> replacement id, applied to stored routes during bootstrap. */
+export const RETIRED_MODEL_REPLACEMENTS = {
+  'nvidia/nemotron-content-safety-reasoning-4b': 'nvidia/nemotron-3.5-lightning-30b-a3b',
+  'qwen/qwen2.5-coder-32b-instruct': 'nvidia/nemotron-3-ultra-550b-a55b',
+  'deepseek-ai/deepseek-v4-flash': 'deepseek-ai/deepseek-v4.1-flash',
+};
 
 export const AI_TASKS = [
   {
@@ -132,7 +135,7 @@ export const AI_TASKS = [
     key: 'practical_detection',
     label: 'Practical difficulty detection',
     description: 'Diagnoses implementation-level difficulties from practice attempts.',
-    defaultModel: 'qwen/qwen2.5-coder-32b-instruct',
+    defaultModel: 'nvidia/nemotron-3-ultra-550b-a55b',
     defaultFallback: 'nvidia/nemotron-3.5-lightning-30b-a3b',
     feature: 'practical_detection',
   },
@@ -164,8 +167,8 @@ export const AI_TASKS = [
     key: 'code_analysis',
     label: 'Programming analysis',
     description: 'Reviews submitted code, finds syntax/logic errors, detects copying.',
-    defaultModel: 'qwen/qwen2.5-coder-32b-instruct',
-    defaultFallback: 'nvidia/nemotron-3-ultra-550b-a55b',
+    defaultModel: 'nvidia/nemotron-3-ultra-550b-a55b',
+    defaultFallback: 'nvidia/nemotron-3.5-lightning-30b-a3b',
     feature: 'code_analysis',
   },
   {
@@ -188,8 +191,8 @@ export const AI_TASKS = [
     key: 'moderation',
     label: 'Content moderation',
     description: 'Safety check on student + generated content.',
-    defaultModel: 'nvidia/nemotron-content-safety-reasoning-4b',
-    defaultFallback: 'nvidia/nemotron-3.5-lightning-30b-a3b',
+    defaultModel: 'nvidia/nemotron-3.5-lightning-30b-a3b',
+    defaultFallback: '',
     feature: 'content_moderation',
   },
 ];
