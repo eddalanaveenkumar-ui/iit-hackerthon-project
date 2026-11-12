@@ -901,6 +901,41 @@ async function main() {
     'moderation only calls the model when the pre-screen matches');
   ok(/timeoutMs:\s*8000/.test(tutorRoutes), 'the screening call has its own short deadline');
 
+  section('16c2. The deterministic analyser works with no provider key');
+
+  // The deployed server has no NVIDIA_API_KEY. JSON-backed flows must still
+  // answer from the local analyser: the fallback was previously gated on a key
+  // existing, so assessment generation returned 400 on exactly the configuration
+  // that ships by default. The gate is gone; this asserts the analyser it now
+  // reaches actually produces usable JSON.
+  const { getLocalProvider } = await import('../src/modules/ai/orchestrator.js');
+  const localAi = getLocalProvider();
+  const localQuiz = await localAi.chat({
+    model: 'local',
+    messages: [{ role: 'user', content: 'Generate a quiz about Java data types.' }],
+    meta: { task: 'assessment_generation', concept: { name: 'Variables and Primitive Types', objectives: ['declare a variable'] } },
+  });
+  const quizJson = (() => {
+    try {
+      return JSON.parse(localQuiz.text);
+    } catch {
+      return null;
+    }
+  })();
+  ok(Boolean(quizJson), 'the deterministic analyser returns parseable JSON for assessment generation');
+  ok(Array.isArray(quizJson?.questions) && quizJson.questions.length > 0, 'the local quiz has questions');
+  ok(
+    quizJson.questions.every((q) => q.prompt && (q.type === 'short_answer' || (Array.isArray(q.options) && q.options.length >= 2))),
+    'local questions are answerable (options or a rubric)',
+  );
+
+  // A no-key deployment must never fail a JSON task merely because there is no
+  // key: the fallback is chosen by allowSimulation, not by hasApiKey.
+  const orchSrc = await (await import('node:fs/promises')).readFile(new URL('../src/modules/ai/orchestrator.js', import.meta.url), 'utf8');
+  ok(!/if \(runtime\.hasApiKey\) \{\s*\n\s*try \{\s*\n\s*const local = new LocalProvider/.test(orchSrc),
+    'the local fallback is not gated on a provider key');
+  ok(/if \(config\.ai\.allowSimulation\)/.test(orchSrc), 'the fallback is gated on the simulation switch instead');
+
   section('16e. Vision — reading a photo of student work');
   const visionCaps = await api('/api/ai/vision/capabilities', { token: naveen.token });
   ok(visionCaps.status === 200, 'vision capabilities are reported');

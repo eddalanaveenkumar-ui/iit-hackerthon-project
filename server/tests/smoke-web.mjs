@@ -210,8 +210,16 @@ const run = async () => {
   check('duplicate submission is rejected', duplicate.status === 400);
 
   const second = await call(`/learning/classrooms/${classroomId}/assessments`, { token: student, method: 'POST', body: { conceptId: concept.id, kind: 'revision', origin: 'ai', questionCount: 3 } });
-  const postponed = await call(`/learning/classrooms/${classroomId}/assessments/${second.body.assessment.id}/postpone`, { token: student, method: 'POST' });
-  check('AI-recommended assessment can be postponed', postponed.status === 200 || postponed.status === 201);
+  // A 400 here used to crash the whole suite on `second.body.assessment.id`,
+  // which hid every check after it. Report the status and reason instead, and
+  // keep the run going — one broken flow should not blind the rest.
+  const secondReason = second.body?.error?.message || JSON.stringify(second.body).slice(0, 140);
+  check(`an AI-recommended assessment can be created (HTTP ${second.status}${second.status !== 201 ? `: ${secondReason}` : ''})`, second.status === 201 && Boolean(second.body?.assessment?.id));
+  const secondId = second.body?.assessment?.id;
+  const postponed = secondId
+    ? await call(`/learning/classrooms/${classroomId}/assessments/${secondId}/postpone`, { token: student, method: 'POST' })
+    : { status: 0 };
+  check(`AI-recommended assessment can be postponed (HTTP ${postponed.status})`, postponed.status === 200 || postponed.status === 201);
 
   // ------------------------------------------------------------- progress
   section('Progress');
