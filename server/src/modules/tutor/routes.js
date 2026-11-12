@@ -257,7 +257,10 @@ router.post(
       classroomId: classroom._id,
     });
 
-    const replyText = typeof opening === 'string' ? opening : opening?.reply || `Let's begin with ${concept.name}.`;
+    const openingCandidate = typeof opening === 'string' ? opening : opening?.reply;
+    const replyText = typeof openingCandidate === 'string' && openingCandidate.trim().length > 0
+      ? openingCandidate.trim()
+      : `Let's begin with ${concept.name}.`;
     const assistantMsg = {
       sessionId,
       userId: req.userId,
@@ -554,7 +557,15 @@ router.post(
       classroomId: session.classroomId,
     });
 
-    const reply = typeof tutorData === 'string' ? tutorData : tutorData?.reply || 'Let me put that another way — which part feels unclear?';
+    // A model can answer with an empty or whitespace-only `reply` — and did, in
+    // production: the deployed turn returned HTTP 200 with a zero-length message
+    // and the client rendered a blank bubble. `||` already covers "", so this
+    // also trims and rejects whitespace, and never ships an empty answer.
+    const FALLBACK_REPLY = 'Let me put that another way — which part feels unclear?';
+    const candidateReply = typeof tutorData === 'string' ? tutorData : tutorData?.reply;
+    const reply = typeof candidateReply === 'string' && candidateReply.trim().length > 0
+      ? candidateReply.trim()
+      : FALLBACK_REPLY;
     const assessmentRecommendation = tutorData?.assessmentRecommendation?.recommend
       ? tutorData.assessmentRecommendation
       : shouldRecommendAssessment
