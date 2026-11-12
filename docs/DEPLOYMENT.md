@@ -82,6 +82,17 @@ takes ~30 s to wake. The SPA shows a loading state during that.
 `VITE_API_BASE_URL` is read at build time by `web/src/lib/api.js`. Leave it
 unset for single-service local runs, where the SPA and API share an origin.
 
+### Deployment Protection must be disabled
+
+New Vercel projects default to **Vercel Authentication** protection, which makes
+every URL — including the production alias — redirect to a `vercel.com/login`
+SSO page instead of serving the app.
+
+**Settings → Deployment Protection → Vercel Authentication → Disable → Save.**
+
+Public preview URLs are necessary for the app to be reachable by anyone other
+than the account owner, and for the API's `CORS_ORIGINS` to be meaningful.
+
 ---
 
 ## 4. Post-deploy checks
@@ -103,6 +114,28 @@ The full contract can be re-verified against the deployed API:
 cd server
 BASE=https://<service>.onrender.com npm run test:smoke
 ```
+
+---
+
+## Deployment status
+
+| Piece | Host | Status |
+| --- | --- | --- |
+| React SPA | Vercel (`learnmate-ai`) | **Live** — <https://learnmate-ai-gold.vercel.app> |
+| Express API | Render (`learnmate-api`) | Awaiting blueprint apply (needs MongoDB URI) |
+| MongoDB | Atlas M0 | Not created yet |
+
+The Vercel project is linked to this repository and auto-deploys on push to
+`main`. `web/vercel.json` is picked up automatically.
+
+Two settings are required to make the deployment fully usable, both requiring
+the Vercel / Render dashboards (no API path available):
+
+1. **Vercel → Settings → Deployment Protection → Vercel Authentication → Disable.** Until this is off, every URL returns Vercel's SSO login page.
+2. **Render → New → Blueprint**, after creating an Atlas cluster. The API cannot be hosted on Vercel (persistent Node process), and no Render/Railway connector is available to automate it.
+
+Once Render is up, set `VITE_API_BASE_URL` on Vercel and redeploy so the SPA
+points at the live API.
 
 ---
 
