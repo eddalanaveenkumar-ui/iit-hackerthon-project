@@ -410,7 +410,15 @@ router.post(
         classroomId: session.classroomId,
       });
       moderation = mod.data && typeof mod.data === 'object' ? mod.data : null;
-      flagged = Boolean(moderation?.flagged);
+      // Strictly interpret the verdict. `Boolean(moderation?.flagged)` treats the
+      // STRING "false" as truthy — a model that answers {"flagged": "false"}
+      // would block a legitimate question, and the reply carried no intelligence
+      // block, so the client crashed reading it. Only an explicit boolean true
+      // plus an explicit block action counts.
+      const verdict = moderation?.flagged;
+      const saysFlagged = verdict === true || verdict === 'true';
+      const saysBlock = moderation?.action === 'escalate_and_block';
+      flagged = saysFlagged && (saysBlock || moderation?.action == null);
       if (flagged) {
         const safetyReply = {
           sessionId: session._id,
@@ -423,9 +431,25 @@ router.post(
           createdAt: new Date(),
         };
         await db.collection('chat_messages').insertOne(safetyReply);
+        // Same shape as a normal turn. A blocked turn is still a turn: the
+        // client reads `intelligence.scaffoldingLevel` on every reply, and
+        // omitting it made a safety response look like a malformed one.
         return res.status(200).json({
           blocked: true,
           message: { id: String(safetyReply._id), role: 'assistant', content: safetyReply.content, meta: safetyReply.meta, createdAt: safetyReply.createdAt },
+          intelligence: {
+            gapsDetected: [],
+            recommendAssessment: null,
+            scaffoldingLevel: 'supported',
+            adaptiveLevel: null,
+            mastery: null,
+            independenceScore: null,
+            learningSpeed: null,
+            hintsUsed: 0,
+            moderation,
+          },
+          retrieval: { strategy: 'skipped', sources: [] },
+          ai: { provider: 'moderation', model: 'policy', latencyMs: 0, simulated: false, fallback: false },
         });
       }
     }

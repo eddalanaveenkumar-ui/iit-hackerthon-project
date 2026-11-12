@@ -29,6 +29,10 @@ const server = spawn(process.execPath, ['src/index.js'], {
     DB_MODE: 'embedded',
     DB_PORT: String(dbPort),
     DB_PATH: dbPath,
+    // The suite exercises many AI-backed flows as a single user in under a
+    // minute, which is more than a real learner generates. Raise the ceiling for
+    // the test run only, so a legitimate limit does not read as a broken app.
+    AI_RATE_LIMIT_MAX: '10000',
     SEED_DEMO: 'true',
     JWT_SECRET: 'e2e-secret-key-0123456789-0123456789',
     SECRET_ENCRYPTION_KEY: 'e2e-encryption-key-0123456789-0123456789',

@@ -819,14 +819,59 @@ async function main() {
   ok(visualTurn.status === 200 || visualTurn.status === 201, 'tutor replies to a confusion about two similar types');
   const visuals = visualTurn.body.message?.meta?.visuals;
   ok(Array.isArray(visuals) && visuals.length > 0, 'the reply carries at least one visual block');
-  ok(visuals.every((v) => ['flow', 'compare', 'steps', 'code', 'hierarchy', 'table'].includes(v.kind)),
+  ok((visuals || []).every((v) => ['flow', 'compare', 'steps', 'code', 'hierarchy', 'table'].includes(v.kind)),
     'every block is a renderable kind the client understands');
   ok(['model', 'generated'].includes(visualTurn.body.message?.meta?.visualsSource),
     'the source of the visual is recorded (model or deterministic)');
   const readBack = await api(`/api/tutor/sessions/${visualSession.body.session.id}`, { token: naveen.token });
   const persisted = readBack.body.messages.find((m) => m.id === visualTurn.body.message?.id);
-  ok(Array.isArray(persisted?.meta?.visuals) && persisted.meta.visuals.length === visuals.length,
+  ok(Array.isArray(persisted?.meta?.visuals) && persisted.meta.visuals.length === (visuals || []).length,
     'visuals are persisted with the message, so history re-renders them');
+
+  section('16a. Moderation verdict parsing — a false alarm must not break a turn');
+
+  // extractJson must prefer an object over an array. A chatty model can emit a
+  // list before its answer, and returning the list made a { flagged } task read
+  // an array and quietly decide the content was safe.
+  const { extractJson } = await import('../src/modules/ai/orchestrator.js');
+  const jsonCases = [
+    ['{"flagged": false}', 'object only'],
+    ['```json\n{"flagged": true}\n```', 'fenced object'],
+    ['Sure. Here you go: {"flagged": false, "action": "allow"}', 'prose then object'],
+    ['[1,2] {"flagged": true}', 'array before object still yields the object'],
+    ['{"reason": "uses {braces}", "flagged": false}', 'braces inside a string'],
+  ];
+  for (const [input, label] of jsonCases) {
+    const parsed = extractJson(input);
+    ok(parsed && !Array.isArray(parsed) && typeof parsed === 'object' && 'flagged' in parsed,
+      `extractJson handles ${label}`);
+  }
+  ok(Array.isArray(extractJson('[{"a":1}]')), 'extractJson still returns arrays when there is no object');
+  ok(extractJson('no json here at all') === null, 'extractJson returns null when there is nothing to parse');
+
+  // A blocked turn must have the same shape as a normal one: the client reads
+  // intelligence.scaffoldingLevel on every reply, so a safety response without
+  // it previously crashed the message thread.
+  // Moderation only blocks when the model says so; with no key the deterministic
+  // analyser decides, so this asserts the shape contract rather than the verdict.
+  const modSession = await api('/api/tutor/sessions', {
+    method: 'POST',
+    token: naveen.token,
+    body: { classroomId: javaClass.id, conceptId: concept.id, mode: 'learn' },
+  });
+  ok(modSession.status === 201, `a session opens for the moderation check (${modSession.body?.error?.message || 'ok'})`);
+  ok(modSession.status === 201, 'a session opens for the moderation check');
+  const benignTurn = await api(`/api/tutor/sessions/${modSession.body?.session?.id}/messages`, {
+    method: 'POST',
+    token: naveen.token,
+    body: { content: 'Can you explain how the JVM allocates memory for an int?' },
+  });
+  ok(benignTurn.status === 200 || benignTurn.status === 201, `a benign message is answered (${benignTurn.status} ${JSON.stringify(benignTurn.body?.error || {}).slice(0, 160)})`);
+  ok(benignTurn.body.blocked !== true, 'a benign question is not blocked');
+  ok(
+    benignTurn.body.intelligence && 'scaffoldingLevel' in benignTurn.body.intelligence && 'gapsDetected' in benignTurn.body.intelligence,
+    'every tutor reply carries the intelligence block the rail reads',
+  );
 
   section('16e. Vision — reading a photo of student work');
   const visionCaps = await api('/api/ai/vision/capabilities', { token: naveen.token });
