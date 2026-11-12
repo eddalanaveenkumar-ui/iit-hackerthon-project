@@ -1,7 +1,13 @@
 import config from '../../config/index.js';
 import { getDb } from '../../db/index.js';
 import { decryptSecret } from '../../utils/crypto.js';
-import { AI_TASKS, DEFAULT_MODEL_REGISTRY, FEATURE_DEFINITIONS } from './catalog.js';
+import {
+  AI_TASKS,
+  DEFAULT_MODEL_REGISTRY,
+  FEATURE_DEFINITIONS,
+  RETIRED_MODEL_REPLACEMENTS,
+  RETIRED_MODELS,
+} from './catalog.js';
 
 /**
  * Central AI configuration store.
@@ -129,6 +135,44 @@ export async function bootstrapAiCatalog({ models = [], routes = [], flags = [],
     }
   }
 
+  // Retire models that are not callable upstream.
+  //
+  // The seed is only *inserted* when missing, so a deployment that was created
+  // before a model was found to be unavailable still holds it. Left alone it
+  // would keep advertising a route that 404s on every call, so any stored route
+  // pointing at one is re-pointed here, and the model document is disabled
+  // (never deleted — usage history references it).
+  const retiredIds = Object.keys(RETIRED_MODELS);
+  if (retiredIds.length) {
+    const retiredModels = await db
+      .collection('ai_models')
+      .find({ modelId: { $in: retiredIds } })
+      .toArray();
+    for (const m of retiredModels) {
+      if (m.retired) continue;
+      await db.collection('ai_models').updateOne(
+        { _id: m._id },
+        {
+          $set: {
+            retired: true,
+            enabled: false,
+            availability: 'unavailable',
+            validationMessage: RETIRED_MODELS[m.modelId] || 'Not available upstream',
+            updatedAt: new Date(),
+          },
+        },
+      );
+    }
+    for (const [from, to] of Object.entries(RETIRED_MODEL_REPLACEMENTS)) {
+      await db
+        .collection('ai_task_routing')
+        .updateMany({ model: from }, { $set: { model: to, updatedAt: new Date() } });
+      await db
+        .collection('ai_task_routing')
+        .updateMany({ fallbackModel: from }, { $set: { fallbackModel: to, updatedAt: new Date() } });
+    }
+  }
+
   // Task routing
   for (const task of AI_TASKS) {
     const existing = await db.collection('ai_task_routing').findOne({ _id: task.key });
@@ -143,6 +187,13 @@ export async function bootstrapAiCatalog({ models = [], routes = [], flags = [],
         enabled: true,
         updatedAt: new Date(),
       });
+    } else if (!DEFAULT_MODEL_REGISTRY.some((m) => m.modelId === existing.model)) {
+      // The catalogue changed under an existing route — keep it pointing at a
+      // model that actually exists rather than failing every call.
+      await db.collection('ai_task_routing').updateOne(
+        { _id: task.key },
+        { $set: { model: task.defaultModel, updatedAt: new Date() } },
+      );
     }
   }
 

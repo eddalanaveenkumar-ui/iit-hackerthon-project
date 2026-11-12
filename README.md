@@ -135,11 +135,36 @@ Detected from real interactions — answers, assessment results and code submiss
 ### Central AI configuration (admin only)
 - NVIDIA NIM base URL, API key (encrypted, write-only, never returned to a browser) and timeouts.
 - **Model registry** with live availability verification against the provider catalogue — availability is never assumed.
-  `nemotron-3.5-lightning-30b-a3b`, `nemotron-3-ultra-550b-a55b`, `nemotron-3.5-embed-1b`, `nemotron-3.5-rerank-8b`, `nemotron-3.5-parse`, `nemotron-content-safety-reasoning-4b`, `qwen/qwen2.5-coder-32b-instruct`, `deepseek-ai/deepseek-v4-flash`.
+
+  Six models are registered, and every one of them is callable:
+
+  | Model | Category | Used for |
+  | --- | --- | --- |
+  | `nvidia/nemotron-3.5-lightning-30b-a3b` | chat | tutoring, gap + misconception detection, moderation |
+  | `nvidia/nemotron-3-ultra-550b-a55b` | reasoning | complex reasoning, assessments, code analysis |
+  | `nvidia/nemotron-3.5-embed-1b` | embedding | syllabus retrieval |
+  | `nvidia/nemotron-3.5-rerank-8b` | rerank | syllabus ranking |
+  | `nvidia/nemotron-3.5-parse` | parse | document → syllabus |
+  | `deepseek-ai/deepseek-v4.1-flash` | chat, **vision** | fallback chat, reading photos of student work |
+
+  Two seed entries — `nvidia/nemotron-content-safety-reasoning-4b` and `qwen/qwen2.5-coder-32b-instruct` — are **not available
+  on NVIDIA's free endpoint**. They are *retired*, not deleted: the documents stay for usage history, are flagged
+  `retired`, and any route that pointed at them is re-pointed to an available model on the next boot. This is covered by
+  `server/tests/migration.mjs`, which replays a legacy database and asserts the deployment heals without data loss.
 - **Task → model routing**, editable per task with fallbacks, applied without a restart.
 - Generation parameters (temperature, top-P, max tokens, JSON mode) and independent **feature toggles** enforced at the route level.
 - Usage analytics: requests, tokens, estimated cost, latency, and breakdowns by model, feature, task and classroom.
 - Provider-independent adapters with a local fallback, per-user rate limiting and response caching.
+
+### Vision — reading a photo of student work
+`POST /api/ai/vision/read` takes `{ image: "data:image/png;base64,…", prompt?, conceptName? }`.
+
+- Only models advertising the `vision` capability are offered (`GET /api/ai/vision/capabilities`), derived from the
+  registry rather than hard-coded. Today that is `deepseek-ai/deepseek-v4.1-flash` alone.
+- The call is **pinned** to that model. The `practical_detection` route points at a text-only model, which would drop
+  the image and answer from the prompt alone — a silent wrong answer rather than an error.
+- PNG/JPEG/WebP/GIF, 5 MB cap. **SVG is refused**: it can carry script and is not a photograph of work.
+- With no usable key it returns `503` and a reason. It never fabricates a transcription.
 
 ---
 
@@ -147,7 +172,8 @@ Detected from real interactions — answers, assessment results and code submiss
 
 ```bash
 cd server
-npm run test:e2e      # 137 assertions, isolated harness (own port + temp database)
+npm run test:e2e      # 184 assertions, isolated harness (own port + temp database)
+npm run test:migration # retiring unavailable models from an existing database
 npm run test:smoke    # 74 assertions against a running server: the client/server contract
 ```
 

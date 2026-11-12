@@ -6,6 +6,7 @@ import { validate } from '../../utils/validation.js';
 import { requireAdmin } from '../../middleware/auth.js';
 import { encryptSecret, maskSecret, decryptSecret } from '../../utils/crypto.js';
 import { logAudit } from '../classrooms/access.js';
+import { readImage, listVisionModels, visionTasks, VISION_MIME_TYPES, VISION_MAX_BYTES } from './vision.js';
 import {
   getConfigBundle,
   getRuntimeConfig,
@@ -476,6 +477,56 @@ router.get(
         simulated: Boolean(l.simulated),
         at: l.createdAt,
       })),
+    });
+  }),
+);
+
+/**
+ * Vision: read a photo of student work.
+ *
+ * Body: { image: dataUrl, prompt?, conceptName?, classroomId? }
+ *
+ * Only models advertising the `vision` capability can be used, and when none is
+ * configured or keyed this returns 503 with a reason rather than a fabricated
+ * reading — a tutor that invents what it cannot see is worse than one that says
+ * it cannot see.
+ */
+router.post(
+  '/vision/read',
+  asyncHandler(async (req, res) => {
+    const data = validate(
+      z.object({
+        image: z.string().min(64).max(8_000_000),
+        prompt: z.string().max(2000).optional(),
+        conceptName: z.string().max(200).optional(),
+        classroomId: z.string().optional(),
+      }),
+      req.body,
+    );
+    const out = await readImage({
+      image: data.image,
+      prompt: data.prompt,
+      conceptName: data.conceptName,
+      userId: req.userId,
+      classroomId: data.classroomId,
+    });
+    if (!out.ok) {
+      const status = out.code === 'INVALID_IMAGE' ? 400 : out.code === 'NO_CREDENTIALS' || out.code === 'VISION_UNAVAILABLE' ? 503 : 502;
+      return res.status(status).json({ error: out.error, code: out.code });
+    }
+    res.json(out);
+  }),
+);
+
+/** Which models can see, and what the endpoint can accept. */
+router.get(
+  '/vision/capabilities',
+  asyncHandler(async (req, res) => {
+    res.json({
+      models: listVisionModels(),
+      tasks: await visionTasks(),
+      mimeTypes: VISION_MIME_TYPES,
+      maxBytes: VISION_MAX_BYTES,
     });
   }),
 );
