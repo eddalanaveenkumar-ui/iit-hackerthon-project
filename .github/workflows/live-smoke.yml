@@ -87,42 +87,44 @@ jobs:
       - name: Summarise results
         if: always()
         run: |
-          {
-            echo "## Live contract suite"
-            echo ""
-            if [ -f /tmp/contract.log ]; then
-              tail -n 1 /tmp/contract.log
-              echo ""
-              # Every failing check, verbatim, so no log download is needed.
-              failing=$(grep -A 200 '^Failures:' /tmp/contract.log | grep '^  •' || true)
-              if [ -n "$failing" ]; then
-                echo "### Failing checks"
-                echo ""
-                echo "$failing"
-                # Also surface each failure as an annotation. The step summary
-                # needs a signed-in browser to read; annotations are readable
-                # over the API, which is what an agent investigating a red run
-                # actually has access to.
-                printf '%s\n' "$failing" | head -15 | while IFS= read -r line; do
-                  echo "::error title=Live contract failure::${line#  • }"
-                done
-              else
-                # No per-check report means the suite died instead of finishing
-                # (a network error, an uncaught exception, a broken payload).
-                # That is a different failure and needs different triage, so say
-                # so explicitly rather than reporting "0 failures".
-                echo "### Suite did not complete"
-                echo ""
-                echo "No check report was produced — it crashed. Last output:"
-                echo ""
-                echo '```'
-                tail -n 25 /tmp/contract.log
-                echo '```'
-                tail -n 6 /tmp/contract.log | while IFS= read -r line; do
-                  echo "::error title=Live contract suite crashed::${line}"
-                done
-              fi
-            else
-              echo "The suite did not run."
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
+          # NOTE: the summary is written to $GITHUB_STEP_SUMMARY, but ::error
+          # commands must go to stdout to become annotations. They are collected
+          # in a separate file and replayed afterwards — redirecting them into
+          # the summary silently swallows them.
+          : > /tmp/annotations.txt
+          summary() { echo "$@" >> "$GITHUB_STEP_SUMMARY"; }
+
+          summary "## Live contract suite"
+          summary ""
+
+          if [ ! -f /tmp/contract.log ]; then
+            summary "The suite did not run."
+            echo "::error title=Live contract suite::did not run"
+            exit 0
+          fi
+
+          summary "$(tail -n 1 /tmp/contract.log)"
+          summary ""
+
+          failing=$(grep -A 400 '^Failures:' /tmp/contract.log | grep '^  •' || true)
+          if [ -n "$failing" ]; then
+            summary "### Failing checks"
+            summary ""
+            summary "$(printf '%s' "$failing")"
+            printf '%s\n' "$failing" | sed 's/^  • //' | head -15 >> /tmp/annotations.txt
+          else
+            # No per-check report means the suite died instead of finishing.
+            summary "### Suite did not complete"
+            summary ""
+            summary "No check report was produced — it crashed. Last output:"
+            summary ""
+            summary '```'
+            summary "$(tail -n 25 /tmp/contract.log)"
+            summary '```'
+            tail -n 4 /tmp/contract.log | sed 's/^/crashed: /' | cut -c1-200 >> /tmp/annotations.txt
+          fi
+
+          # Replay outside the redirect so they register as annotations.
+          while IFS= read -r line; do
+            [ -n "$line" ] && echo "::error title=Live contract failure::${line}"
+          done < /tmp/annotations.txt
