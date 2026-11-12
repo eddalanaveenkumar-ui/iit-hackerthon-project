@@ -963,6 +963,49 @@ async function main() {
     `even a minimal prompt yields a non-empty reply (${JSON.stringify(String(emptyCheckText || '').slice(0, 60))})`,
   );
 
+  section('16c4. A bad model answer never costs the learner an assessment');
+
+  // The model can return 200 with JSON that parses but is unusable — no options,
+  // blank prompts, the wrong shape. That used to surface as a 400 error dialog in
+  // front of a student. The route now regenerates locally instead.
+  const { runJsonTaskLocally } = await import('../src/modules/ai/orchestrator.js');
+  ok(typeof runJsonTaskLocally === 'function', 'a local generation path exists for the backstop');
+  const backstopQuiz = await runJsonTaskLocally('assessment_generation', {
+    messages: [{ role: 'user', content: 'quiz please' }],
+    meta: { task: 'assessment_generation', concept: { name: 'Variables and Primitive Types', objectives: ['declare a variable'] } },
+  });
+  ok(Array.isArray(backstopQuiz?.data?.questions) && backstopQuiz.data.questions.length > 0,
+    `the local backstop produces questions (${backstopQuiz?.data?.questions?.length ?? 0})`);
+  ok(backstopQuiz.meta.provider === 'local', 'the backstop is attributed to the local analyser, not a model');
+
+  // The helper existing proves nothing — the route has to actually reach it.
+  // Asserting the wiring because removing the call left the suite green, which
+  // means a test of the helper alone cannot protect this.
+  const assessmentSrc = await (await import('node:fs/promises')).readFile(
+    new URL('../src/modules/assessments/routes.js', import.meta.url),
+    'utf8',
+  );
+  ok(/runJsonTaskLocally\('assessment_generation'/.test(assessmentSrc),
+    'the assessment route regenerates locally when the model returns nothing usable');
+  ok(/questions\s*=\s*sanitiseQuestions\(local\?\.data\?\.questions/.test(assessmentSrc),
+    'the regenerated questions are what gets persisted');
+
+  // End to end: a normal request still succeeds, so the backstop did not replace
+  // the real path.
+  const backstopRoom = await api('/api/classrooms', { token: naveen.token });
+  const backstopClass = backstopRoom.body.classrooms.find((c) => c.name.includes('Java Programming'));
+  const backstopOutline = await api(`/api/tutor/classrooms/${backstopClass.id}/outline`, { token: naveen.token });
+  const backstopConcept = backstopOutline.body.subjects[0].units[0].concepts[0];
+  const backstopAssessment = await api(`/api/learning/classrooms/${backstopClass.id}/assessments`, {
+    method: 'POST',
+    token: naveen.token,
+    body: { conceptId: backstopConcept.id, kind: 'revision', origin: 'ai', questionCount: 3 },
+  });
+  ok(
+    backstopAssessment.status === 201 && backstopAssessment.body.questions?.length >= 3,
+    `an AI-recommended assessment is still generated normally (${backstopAssessment.status}, ${backstopAssessment.body?.questions?.length ?? 0} questions)`,
+  );
+
   section('16e. Vision — reading a photo of student work');
   const visionCaps = await api('/api/ai/vision/capabilities', { token: naveen.token });
   ok(visionCaps.status === 200, 'vision capabilities are reported');

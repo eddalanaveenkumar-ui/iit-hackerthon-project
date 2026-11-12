@@ -6,7 +6,7 @@ import { asyncHandler, badRequest, notFound, forbidden } from '../../utils/error
 import { validate, round } from '../../utils/validation.js';
 import { requireClassroomMember, requireClassroomStaff, toOid } from '../classrooms/access.js';
 import { isFeatureEnabled } from '../ai/config-store.js';
-import { runJsonTask } from '../ai/orchestrator.js';
+import { runJsonTask, runJsonTaskLocally } from '../ai/orchestrator.js';
 import { prompts } from '../ai/prompts.js';
 import {
   getOrCreateProfile,
@@ -110,7 +110,33 @@ router.post(
       classroomId: classroom._id,
     });
 
-    const questions = sanitiseQuestions(generated?.questions, concept._id);
+    let questions = sanitiseQuestions(generated?.questions, concept._id);
+    if (!questions.length) {
+      // A model can answer 200 with JSON that parses but contains nothing usable —
+      // no options, blank prompts, the wrong shape. Failing the request there
+      // denies the learner an assessment for a reason that is not theirs, so
+      // generate from the deterministic analyser instead. A slightly generic quiz
+      // is better than an error dialog in front of a student.
+      const local = await runJsonTaskLocally('assessment_generation', {
+        messages: prompts.assessment({
+          context: {
+            concept: { ...concept, unitName: unit?.name, subjectName: subject?.name },
+            profile,
+            openGaps,
+          },
+          kind: data.kind,
+          count,
+        }),
+        meta: {
+          task: 'assessment_generation',
+          concept: { ...concept, unitName: unit?.name, subjectName: subject?.name },
+          conceptId: concept._id,
+          kind: data.kind,
+          openGaps,
+        },
+      });
+      questions = sanitiseQuestions(local?.data?.questions, concept._id);
+    }
     if (!questions.length) throw badRequest('Could not generate a valid assessment. Please try again.');
 
     const now = new Date();
