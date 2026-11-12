@@ -45,16 +45,33 @@ export const apiUrl = (path) => `${API_BASE}/api${path}`;
 export async function api(path, { method = 'GET', body, headers = {}, signal, raw = false } = {}) {
   const token = getToken();
   const isForm = body instanceof FormData;
-  const res = await fetch(apiUrl(path), {
-    method,
-    headers: {
-      ...(isForm ? {} : body ? { 'Content-Type': 'application/json' } : {}),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...headers,
-    },
-    body: body ? (isForm ? body : JSON.stringify(body)) : undefined,
-    signal,
-  });
+  let res;
+  try {
+    res = await fetch(apiUrl(path), {
+      method,
+      headers: {
+        ...(isForm ? {} : body ? { 'Content-Type': 'application/json' } : {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...headers,
+      },
+      body: body ? (isForm ? body : JSON.stringify(body)) : undefined,
+      signal,
+    });
+  } catch (err) {
+    // A network failure is not an HTTP failure. `fetch` rejects with "Failed to
+    // fetch", which tells the person looking at the screen nothing — and on a
+    // serverless deployment it usually means the function was killed mid-request
+    // (a timeout) rather than that the app is down. Name the likely cause and
+    // say whether retrying can help.
+    if (err?.name === 'AbortError') {
+      throw new ApiError('The request was cancelled.', 0, 'ABORTED');
+    }
+    throw new ApiError(
+      'The server did not respond. This is usually a request that took too long — try again, and if it keeps happening tell your administrator.',
+      0,
+      'NETWORK_ERROR',
+    );
+  }
 
   if (res.status === 401) {
     setToken(null);

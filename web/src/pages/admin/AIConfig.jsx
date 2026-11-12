@@ -724,10 +724,14 @@ function EndpointModal({ model, open, onClose, onSaved, toast }) {
     setTesting(true);
     setTestResult(null);
     try {
+      // The server reports a failed probe as a normal payload (ok:false + reason),
+      // so the panel can explain it. Only a genuine network failure lands in the
+      // catch — that is the difference between "this key was rejected" and
+      // "LearnMate is down".
       const res = await api('/ai/admin/models/endpoints/test', { method: 'POST', body: { modelId: model.modelId } });
       setTestResult(res);
     } catch (e) {
-      setTestResult({ ok: false, detail: e.message });
+      setTestResult({ ok: false, detail: e.message, hint: e.code === 'NETWORK_ERROR' ? 'The app is reachable but this probe did not finish. Retry in a moment.' : undefined });
     } finally {
       setTesting(false);
     }
@@ -799,6 +803,10 @@ function EndpointModal({ model, open, onClose, onSaved, toast }) {
             <p className="mt-0.5 break-all">{testResult.detail}</p>
             {testResult.endpoint ? <p className="mt-1 font-mono text-[10.5px] opacity-80">{testResult.endpoint}</p> : null}
             {testResult.sample ? <p className="mt-1 italic opacity-80">“{testResult.sample}”</p> : null}
+            {testResult.hint ? <p className="mt-1 font-medium opacity-90">{testResult.hint}</p> : null}
+            {!testResult.ok && testResult.reason ? (
+              <p className="mt-1 opacity-70">Reason: {testResult.reason}{testResult.status ? ` (HTTP ${testResult.status})` : ''}. The app itself is working.</p>
+            ) : null}
           </div>
         ) : null}
       </div>
