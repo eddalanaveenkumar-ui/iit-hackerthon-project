@@ -26,11 +26,26 @@ export class ApiError extends Error {
   }
 }
 
-/** Single API entry point. Relative URLs only — the dev server proxies /api. */
+/**
+ * API origin.
+ *
+ * Defaults to an empty string so every request is same-origin and relative:
+ * in local dev the Vite proxy forwards /api to :3001, and in a single-service
+ * deployment Express serves both the SPA and the API.
+ *
+ * When the API lives on a different host (e.g. the SPA on Vercel and the API
+ * on Render), set VITE_API_BASE_URL at build time, e.g.
+ *   VITE_API_BASE_URL=https://learnmate-api.onrender.com
+ */
+export const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
+
+export const apiUrl = (path) => `${API_BASE}/api${path}`;
+
+/** Single API entry point. */
 export async function api(path, { method = 'GET', body, headers = {}, signal, raw = false } = {}) {
   const token = getToken();
   const isForm = body instanceof FormData;
-  const res = await fetch(`/api${path}`, {
+  const res = await fetch(apiUrl(path), {
     method,
     headers: {
       ...(isForm ? {} : body ? { 'Content-Type': 'application/json' } : {}),

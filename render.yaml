@@ -1,0 +1,43 @@
+# Render blueprint — deploys the LearnMate AI API as a persistent Node web service.
+#
+# Usage: push this file, then in Render choose
+#   New → Blueprint → connect this repository → Apply.
+# Render reads this file and creates the service below.
+#
+# Set the secret env vars marked `sync: false` in the Render dashboard
+# (JWT_SECRET, SECRET_ENCRYPTION_KEY, MONGODB_URI, CORS_ORIGINS).
+services:
+  - type: web
+    name: learnmate-api
+    runtime: node
+    plan: free
+    region: oregon
+    rootDir: server
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DB_MODE
+        value: external
+      - key: DB_NAME
+        value: learnmate
+      # Set in the Render dashboard — never committed.
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: SECRET_ENCRYPTION_KEY
+        sync: false
+      # Your Vercel URL, so the browser is allowed to call this API.
+      - key: CORS_ORIGINS
+        sync: false
+      - key: SEED_DEMO
+        value: "true"
+      # Optional — add later from the admin AI console instead.
+      - key: NVIDIA_API_KEY
+        sync: false
+      - key: NVIDIA_BASE_URL
+        value: https://integrate.api.nvidia.com/v1
