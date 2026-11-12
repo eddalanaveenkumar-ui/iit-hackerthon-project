@@ -137,8 +137,14 @@ const run = async () => {
   const sessionId = started.body.session.id;
 
   const turn = await call(`/tutor/sessions/${sessionId}/messages`, { token: student, method: 'POST', body: { content: 'I think int is 8 bytes on every JVM.', signal: { wrongAnswer: true } } });
-  check('a tutor turn returns the reply + intelligence block', turn.status === 200 && turn.body.message.content.length > 20 && turn.body.intelligence);
-  check('turn intelligence drives the right-hand rail', 'scaffoldingLevel' in turn.body.intelligence && 'gapsDetected' in turn.body.intelligence);
+  check('a tutor turn returns the reply + intelligence block', turn.status === 200 && turn.body.message?.content?.length > 20 && turn.body.intelligence);
+  // Guard the property rather than dereferencing it: this suite drives dozens of
+  // AI-backed flows as one user, so a 429 here is about the rate limit, not about
+  // the payload. Crashing on `in undefined` hid that distinction for three runs.
+  check('turn intelligence drives the right-hand rail', Boolean(turn.body.intelligence) && 'scaffoldingLevel' in turn.body.intelligence && 'gapsDetected' in turn.body.intelligence);
+  if (turn.status === 429) {
+    console.log('  \u001b[33m!\u001b[0m the AI rate limit was hit — raise AI_RATE_LIMIT_MAX for the deployment running this suite');
+  }
   check('retrieval sources are exposed for citation chips', Array.isArray(turn.body.retrieval?.sources));
 
   const reloaded = await call(`/tutor/sessions/${sessionId}`, { token: student });

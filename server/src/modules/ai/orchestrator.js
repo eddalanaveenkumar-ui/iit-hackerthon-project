@@ -25,7 +25,12 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 const CACHE_MAX = 300;
 
 const rateBuckets = new Map();
-const RATE_LIMIT = { windowMs: 60_000, max: 60 };
+// Tunable so a load test — or the contract suite, which deliberately drives many
+// flows as one user — does not trip the limit meant to protect a real learner.
+const RATE_LIMIT = {
+  windowMs: Number(process.env.AI_RATE_LIMIT_WINDOW_MS || 60_000),
+  max: Number(process.env.AI_RATE_LIMIT_MAX || 60),
+};
 
 let providerCache = { key: '', provider: null };
 
@@ -110,7 +115,14 @@ export function extractJson(text) {
   } catch {
     /* fall through */
   }
-  const firstBrace = candidate.search(/[[{]/);
+  // Prefer an object over an array. A chatty model often emits a list first
+  // ("here are the steps: [1, 2] the answer is {...}"), and returning that list
+  // makes every caller downstream see the wrong shape — a JSON task expecting
+  // { flagged } silently read an array and reported "not flagged".
+  const objectStart = candidate.search(/\{/);
+  const arrayStart = candidate.search(/\[/);
+  const preferObject = objectStart !== -1 && (arrayStart === -1 || objectStart < arrayStart || true);
+  const firstBrace = preferObject ? objectStart : arrayStart;
   if (firstBrace === -1) return null;
   const openChar = candidate[firstBrace];
   const closeChar = openChar === '{' ? '}' : ']';
