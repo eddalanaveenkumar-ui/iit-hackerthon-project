@@ -1,0 +1,78 @@
+name: Live smoke test
+
+# Verifies the *deployed* app, not the code. Runs from GitHub's network, so it
+# catches problems a local test cannot: a broken /api rewrite, a serverless
+# handler that 500s, an unseeded database, or missing environment variables.
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: Frontend origin to test
+        required: false
+        default: https://web-livid-nu-76.vercel.app
+  schedule:
+    - cron: '0 6 * * *'
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Health check
+        env:
+          BASE: ${{ inputs.base_url || 'https://web-livid-nu-76.vercel.app' }}
+        run: |
+          echo "Testing $BASE"
+          body=$(curl -sS -m 60 -w '\n%{http_code}' "$BASE/api/health")
+          code=$(printf '%s' "$body" | tail -n1)
+          json=$(printf '%s' "$body" | sed '$d')
+          echo "$json"
+          if [ "$code" != "200" ]; then
+            echo "::error::/api/health returned $code while calling $BASE/api/health"
+            exit 1
+          fi
+          printf '%s' "$json" | grep -q '"ok":true' || { echo "::error::health payload not ok"; exit 1; }
+          printf '%s' "$json" | grep -q '"connected":true' || { echo "::error::database not connected"; exit 1; }
+
+      - name: Sign in as a demo user
+        env:
+          BASE: ${{ inputs.base_url || 'https://web-livid-nu-76.vercel.app' }}
+        run: |
+          body=$(curl -sS -m 60 -w '\n%{http_code}' -X POST "$BASE/api/auth/login" \
+            -H 'content-type: application/json' \
+            -d '{"email":"naveen@learnmate.ai","password":"LearnMate123!"}')
+          code=$(printf '%s' "$body" | tail -n1)
+          json=$(printf '%s' "$body" | sed '$d')
+          if [ "$code" != "200" ]; then
+            echo "::error::login returned $code"
+            echo "$json"
+            exit 1
+          fi
+          token=$(printf '%s' "$json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).token||"")}catch{process.stdout.write("")}})')
+          if [ -z "$token" ]; then
+            echo "::error::login succeeded but returned no token"
+            exit 1
+          fi
+          echo "Login OK, token length ${#token}"
+          echo "TOKEN=$token" >> "$GITHUB_ENV"
+
+      - name: Authenticated read
+        env:
+          BASE: ${{ inputs.base_url || 'https://web-livid-nu-76.vercel.app' }}
+        run: |
+          code=$(curl -sS -m 60 -o /tmp/me.json -w '%{http_code}' "$BASE/api/auth/me" -H "authorization: Bearer $TOKEN")
+          echo "GET /api/auth/me -> $code"
+          cat /tmp/me.json; echo
+          [ "$code" = "200" ] || { echo "::error::authenticated request failed"; exit 1; }
+
+      - name: Full contract suite against the live API
+        env:
+          BASE: ${{ inputs.base_url || 'https://web-livid-nu-76.vercel.app' }}
+        run: node server/tests/smoke-web.mjs
