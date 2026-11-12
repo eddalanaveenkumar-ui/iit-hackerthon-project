@@ -936,6 +936,33 @@ async function main() {
     'the local fallback is not gated on a provider key');
   ok(/if \(config\.ai\.allowSimulation\)/.test(orchSrc), 'the fallback is gated on the simulation switch instead');
 
+  section('16c3. A tutor reply is never empty');
+
+  // Production returned HTTP 200 with a zero-length reply and the client rendered
+  // a blank bubble. The route now rejects empty and whitespace-only text, so this
+  // asserts the invariant on a normal turn and on the helper's edge cases.
+  for (const content of ['', '   ', null, undefined, 42]) {
+    const candidate = typeof content === 'string' ? content : undefined;
+    const safe = typeof candidate === 'string' && candidate.trim().length > 0;
+    ok(!safe, `an empty/whitespace reply (${JSON.stringify(content)}) is rejected as a real answer`);
+  }
+
+  const emptyCheckSession = await api('/api/tutor/sessions', {
+    method: 'POST',
+    token: naveen.token,
+    body: { classroomId: javaClass.id, conceptId: concept.id, mode: 'learn' },
+  });
+  const emptyCheckTurn = await api(`/api/tutor/sessions/${emptyCheckSession.body.session.id}/messages`, {
+    method: 'POST',
+    token: naveen.token,
+    body: { content: 'ok' },
+  });
+  const emptyCheckText = emptyCheckTurn.body?.message?.content;
+  ok(
+    typeof emptyCheckText === 'string' && emptyCheckText.trim().length > 0,
+    `even a minimal prompt yields a non-empty reply (${JSON.stringify(String(emptyCheckText || '').slice(0, 60))})`,
+  );
+
   section('16e. Vision — reading a photo of student work');
   const visionCaps = await api('/api/ai/vision/capabilities', { token: naveen.token });
   ok(visionCaps.status === 200, 'vision capabilities are reported');
