@@ -388,7 +388,12 @@ export async function verifyModelAvailability() {
   let detail = '';
   let ok = false;
   try {
-    available = await provider.listModels();
+    // Use the global key when present, else any model's own key — with
+    // per-model credentials there may be no global key at all, and the
+    // catalogue is the same for every key on the same host.
+    const anyModelKey = Object.values(runtime.models || {}).find((m) => m.apiKeyCipher)?.apiKeyCipher || '';
+    const catalogueProvider = provider.apiKey ? provider : getProvider({ ...runtime, apiKey: anyModelKey, hasApiKey: Boolean(anyModelKey) });
+    available = await catalogueProvider.listModels();
     ok = true;
     detail = runtime.hasApiKey
       ? `Catalogue reachable — ${available.length} models reported by ${runtime.baseUrl}`

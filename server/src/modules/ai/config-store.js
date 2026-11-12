@@ -44,16 +44,52 @@ export function invalidateAiCache() {
 }
 
 /**
- * Model documents keyed by modelId, with each model's own credentials
- * decrypted. Passed to the provider so a model can use its own endpoint, key
- * and path instead of the global NVIDIA configuration.
+ * Environment variable holding a model's own key, when one is set.
+ *
+ * `credentialKey` is the per-model slot declared in the catalogue
+ * (NVIDIA_API_KEY_LIGHTNING, ..._ULTRA, ...). `envHint` is a derived fallback so
+ * a model added to the registry later still gets its own variable without a
+ * code change: nvidia/nemotron-3.5-parse -> NVIDIA_NEMOTRON_3_5_PARSE_KEY.
+ */
+export function envKeyFor(model) {
+  if (!model) return '';
+  const explicit = config.ai.modelKeys?.[model.modelId];
+  if (explicit) return explicit;
+  const slot = model.credentialKey ? process.env[model.credentialKey] : '';
+  if (slot) return slot;
+  return process.env[envSlotName(model.modelId)] || '';
+}
+
+/** Derive an environment slot name from a model id. */
+export function envSlotName(modelId) {
+  return `${String(modelId)
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')}_API_KEY`;
+}
+
+/**
+ * Model documents keyed by modelId, with each model's own credentials resolved.
+ * Passed to the provider so a model can use its own endpoint, key and path
+ * instead of the global NVIDIA configuration.
+ *
+ * The resolved key is stored as `apiKeyCipher` because that is the field the
+ * endpoint resolver reads; it holds plaintext in memory only for this request
+ * and is never serialised. `credentialSource` records where it came from so the
+ * admin panel can show "own key (environment)" rather than just "own key".
  */
 export function modelsById(bundle) {
   const out = {};
   for (const model of bundle.models || []) {
+    const stored = model.apiKeyCipher ? decryptSecret(model.apiKeyCipher) : '';
+    const fromEnv = stored ? '' : envKeyFor(model);
     out[model.modelId] = {
       ...model,
-      apiKeyCipher: model.apiKeyCipher ? decryptSecret(model.apiKeyCipher) : '',
+      apiKeyCipher: stored || fromEnv,
+      credentialSource: stored ? 'model' : fromEnv ? 'model-env' : 'none',
+      credentialSlot: model.credentialKey || envSlotName(model.modelId),
+      hasStoredKey: Boolean(stored),
+      hasEnvKey: Boolean(fromEnv),
     };
   }
   return out;
@@ -67,13 +103,18 @@ export async function getRuntimeConfig() {
   // A model with its own key counts as "configured" even when the global key is
   // empty — that is the whole point of per-model credentials.
   const anyModelKey = Object.values(models).some((m) => m.apiKeyCipher);
+  const withCredentials = Object.values(models).filter((m) => m.apiKeyCipher).length;
   return {
     provider: cfg.provider || 'nvidia',
     baseUrl: cfg.baseUrl || config.ai.nvidiaBaseUrl,
     apiKey,
     models,
     hasApiKey: Boolean(apiKey) || anyModelKey,
-    modelKeyCount: Object.values(models).filter((m) => m.apiKeyCipher).length,
+    modelKeyCount: withCredentials,
+    modelCount: Object.keys(models).length,
+    // Six models, six credential slots. This is the number the admin panel
+    // reports so "5 of 6 keys configured" is visible before a lesson fails.
+    credentialsFromEnv: Object.values(models).filter((m) => m.credentialSource === 'model-env').length,
     timeoutMs: cfg.timeoutMs ?? config.ai.requestTimeoutMs,
     maxRetries: cfg.maxRetries ?? config.ai.maxRetries,
     generation: {

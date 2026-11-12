@@ -123,6 +123,8 @@ Detected from real interactions — answers, assessment results and code submiss
 - Provider-independent adapters with a local deterministic fallback, so learning never blocks.
 - **Every model is configured individually** — its own base URL, endpoint path and API key, or blank
   to inherit the global NVIDIA key. Keys are encrypted at rest and never returned to the browser.
+- **One key per model**, so quotas are split: a busy tutoring session cannot exhaust the key that
+  assessment grading needs. See *API keys — one slot per model* below.
 - Endpoint paths are derived from the model's capability, because NIM serves different surfaces:
   chat models on `/chat/completions`, embeddings on `/embeddings`, rerankers on `/ranking`.
 - Admin-only. Applies without a restart, and each model can be tested from the panel.
@@ -151,6 +153,31 @@ Detected from real interactions — answers, assessment results and code submiss
   on NVIDIA's free endpoint**. They are *retired*, not deleted: the documents stay for usage history, are flagged
   `retired`, and any route that pointed at them is re-pointed to an available model on the next boot. This is covered by
   `server/tests/migration.mjs`, which replays a legacy database and asserts the deployment heals without data loss.
+### API keys — one slot per model
+NIM accepts a single key for every model, but **rate limits are enforced per key**. Pointing six models at one
+key means they share one quota, and whichever runs most starves the rest. So each model holds its own credential:
+
+| Model | Environment slot |
+| --- | --- |
+| `nvidia/nemotron-3.5-lightning-30b-a3b` | `NVIDIA_API_KEY_LIGHTNING` |
+| `nvidia/nemotron-3-ultra-550b-a55b` | `NVIDIA_API_KEY_ULTRA` |
+| `nvidia/nemotron-3.5-embed-1b` | `NVIDIA_API_KEY_EMBED` |
+| `nvidia/nemotron-3.5-rerank-8b` | `NVIDIA_API_KEY_RERANK` |
+| `nvidia/nemotron-3.5-parse` | `NVIDIA_API_KEY_PARSE` |
+| `deepseek-ai/deepseek-v4.1-flash` | `NVIDIA_API_KEY_DEEPSEEK` |
+
+Resolution order, per model: **key saved in the admin panel** → **its environment slot** → **`NVIDIA_API_KEY`**. Unset
+slots fall through, so a deployment with one shared key keeps working with no configuration at all.
+
+- `GET /api/ai/admin/credentials` — all eight slots: six callable, plus the two models NVIDIA does not serve, each
+  with the reason. Reporting only six would look like the eight-key request was ignored.
+- `PATCH /api/ai/admin/credentials/:modelId` — `{ apiKey }` or `{ clearApiKey: true }`, affecting **one** model.
+  A retired model refuses a key rather than accepting one that cannot work.
+- **Admin → AI configuration → API keys** shows which models have their own key, which are borrowing the global one,
+  and which have none — so a quota problem is visible before a lesson fails.
+- A model added to the registry later gets a derived slot automatically:
+  `nvidia/nemotron-9-future-1b` → `NVIDIA_NEMOTRON_9_FUTURE_1B_API_KEY`.
+
 - **Task → model routing**, editable per task with fallbacks, applied without a restart.
 - Generation parameters (temperature, top-P, max tokens, JSON mode) and independent **feature toggles** enforced at the route level.
 - Usage analytics: requests, tokens, estimated cost, latency, and breakdowns by model, feature, task and classroom.
@@ -172,9 +199,9 @@ Detected from real interactions — answers, assessment results and code submiss
 
 ```bash
 cd server
-npm run test:e2e      # 184 assertions, isolated harness (own port + temp database)
-npm run test:migration # retiring unavailable models from an existing database
-npm run test:smoke    # 74 assertions against a running server: the client/server contract
+npm run test:e2e      # 207 assertions, isolated harness (own port + temp database)
+npm run test:migration # 13 assertions: retiring unavailable models + credential slots
+npm run test:smoke    # 76 assertions against a running server: the client/server contract
 ```
 
 `test:e2e` boots a disposable server on port `3111` with a temp database, exercises all twelve required scenarios plus isolation and authorisation attacks, then tears everything down.

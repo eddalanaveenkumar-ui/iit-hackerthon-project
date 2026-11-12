@@ -17,7 +17,9 @@ process.env.DB_PATH = `/tmp/learnmate-migration-${process.pid}`;
 
 const { connectDb, closeDb, getDb } = await import('../src/db/index.js');
 const { bootstrapAiCatalog } = await import('../src/modules/ai/config-store.js');
-const { MODEL_REGISTRY_SEED, RETIRED_MODELS } = await import('../src/modules/ai/catalog.js');
+const { MODEL_REGISTRY_SEED, RETIRED_MODELS, CATALOGUE_SLOT_COUNT, UNAVAILABLE_MODELS } =
+  await import('../src/modules/ai/catalog.js');
+const { envSlotName } = await import('../src/modules/ai/config-store.js');
 
 let pass = 0;
 const fails = [];
@@ -120,6 +122,33 @@ check('a fallback pointing at a retired model is also re-pointed', () => {
     if (!r.fallbackModel) continue;
     assert.ok(liveIds.has(r.fallbackModel), `${r.task} fallback ${r.fallbackModel} is not callable`);
   }
+});
+
+// Credential slots: the migration must also leave every model with exactly one
+// place to put a key. A duplicate slot would mean one key silently overwriting
+// another model's, which is the failure the eight-key requirement exists to fix.
+check('the eight requested slots are accounted for', () => {
+  assert.equal(CATALOGUE_SLOT_COUNT, 8);
+  assert.equal(MODEL_REGISTRY_SEED.length, 6);
+  assert.equal(Object.keys(UNAVAILABLE_MODELS).length, 2);
+});
+
+check('each callable model declares a distinct credential slot', () => {
+  const slots = MODEL_REGISTRY_SEED.map((m) => m.credentialKey);
+  assert.ok(slots.every(Boolean), 'every seed model names an environment slot');
+  assert.equal(new Set(slots).size, slots.length, 'no two models share a slot');
+});
+
+check('the two unserved models reserve a slot but are not seeded', () => {
+  for (const [id, meta] of Object.entries(UNAVAILABLE_MODELS)) {
+    assert.ok(meta.credentialKey, `${id} reserves an env slot for a future release`);
+    assert.ok(meta.reason, `${id} explains why it cannot be used`);
+    assert.ok(!MODEL_REGISTRY_SEED.some((m) => m.modelId === id), `${id} is not offered as callable`);
+  }
+});
+
+check('a model id maps to a derived slot even without an explicit one', () => {
+  assert.equal(envSlotName('nvidia/nemotron-9-future-1b'), 'NVIDIA_NEMOTRON_9_FUTURE_1B_API_KEY');
 });
 
 // Idempotency: a second boot must not churn records or duplicate anything.

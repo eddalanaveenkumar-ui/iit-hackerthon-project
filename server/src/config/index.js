@@ -50,6 +50,11 @@ export const config = {
     // When no NVIDIA key is configured the platform runs the deterministic
     // local adapter so every workflow remains testable end to end.
     allowSimulation: bool(process.env.AI_ALLOW_SIMULATION, true),
+    // Per-model credential slots. Each model resolves its own key first (see
+    // ai/config-store.js), so quotas can be split without a redeploy. This map
+    // exists for deployments that prefer one generic variable per model id over
+    // the named NVIDIA_API_KEY_* slots in the catalogue.
+    modelKeys: {},
   },
 
   seedDemo: bool(process.env.SEED_DEMO, true),
