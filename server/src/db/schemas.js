@@ -1,0 +1,587 @@
+/**
+ * Data model / schema registry for LearnMate AI.
+ *
+ * MongoDB is schema-flexible, but a production system still needs an explicit,
+ * documented contract. Each entry below is the canonical document shape plus
+ * the indexes created at startup (see db/schema.js ensureIndexes()).
+ */
+export const SCHEMAS = {
+  users: {
+    collection: 'users',
+    description: 'Every account is a single unified user account. No teacher/student split.',
+    fields: {
+      _id: 'ObjectId',
+      name: 'string',
+      email: 'string (unique, lowercase)',
+      passwordHash: 'string (bcrypt, never returned by the API)',
+      avatarColor: 'string',
+      role: "'user' | 'admin' — platform administrator only, unrelated to classroom roles",
+      headline: 'string',
+      preferences: '{ theme: light|dark, notifications: boolean }',
+      lastActiveAt: 'Date',
+      createdAt: 'Date',
+      updatedAt: 'Date',
+    },
+    indexes: [{ keys: { email: 1 }, options: { unique: true } }, { keys: { createdAt: -1 } }],
+  },
+
+  classrooms: {
+    collection: 'classrooms',
+    description: 'A learning environment owned by a user. Classroom-scoped permissions decide capabilities.',
+    fields: {
+      _id: 'ObjectId',
+      code: "string — unique classroom ID, e.g. LM-7KQ4-9XZ2 (join by code)",
+      name: 'string',
+      description: 'string',
+      subject: 'string (course / subject label)',
+      coverImage: 'string (data URL or remote URL)',
+      ownerId: 'ObjectId -> users (primary owner)',
+      joinApprovalRequired: 'boolean',
+      settings: {
+        allowStudentChat: 'boolean',
+        monitoringDefault: 'boolean',
+        adaptiveDifficulty: 'boolean',
+        practicalEnabled: 'boolean',
+        aiTutorEnabled: 'boolean',
+        knowledgeGapDetection: 'boolean',
+        autoAssessments: 'boolean',
+      },
+      stats: '{ memberCount, teacherCount, pendingRequests, lastActivityAt }',
+      archived: 'boolean',
+      createdAt: 'Date',
+      updatedAt: 'Date',
+    },
+    indexes: [
+      { keys: { code: 1 }, options: { unique: true } },
+      { keys: { ownerId: 1 } },
+      { keys: { 'stats.memberCount': -1 } },
+    ],
+  },
+
+  classroom_memberships: {
+    collection: 'classroom_memberships',
+    description:
+      'Joins a user to a classroom. role is classroom-scoped: owner | co_owner | teacher | student. ' +
+      'One user can be owner in one classroom and student in another.',
+    fields: {
+      _id: 'ObjectId',
+      classroomId: 'ObjectId -> classrooms',
+      userId: 'ObjectId -> users',
+      role: "'owner' | 'co_owner' | 'teacher' | 'student'",
+      status: "'active' | 'removed' | 'left' | 'pending'",
+      permissions: {
+        manageMembers: 'boolean',
+        manageSyllabus: 'boolean',
+        monitorStudents: 'boolean — per-teacher independent monitoring switch',
+        manageAssessments: 'boolean',
+        viewAnalytics: 'boolean',
+      },
+      invitedBy: 'ObjectId -> users | null',
+      joinedAt: 'Date',
+      createdAt: 'Date',
+      updatedAt: 'Date',
+    },
+    indexes: [
+      { keys: { classroomId: 1, userId: 1 }, options: { unique: true } },
+      { keys: { userId: 1, status: 1 } },
+      { keys: { classroomId: 1, role: 1 } },
+    ],
+  },
+
+  classroom_roles: {
+    collection: 'classroom_roles',
+    description: 'Custom permission templates a primary owner can assign to co-owners/teachers.',
+    fields: {
+      _id: 'ObjectId',
+      classroomId: 'ObjectId',
+      name: 'string',
+      permissions: '{ manageMembers, manageSyllabus, monitorStudents, manageAssessments, viewAnalytics }',
+      createdBy: 'ObjectId -> users',
+      createdAt: 'Date',
+    },
+    indexes: [{ keys: { classroomId: 1 } }],
+  },
+
+  teacher_permissions: {
+    collection: 'teacher_permissions',
+    description:
+      'Independent per-teacher capability + monitoring ON/OFF record. Monitoring OFF blocks individual ' +
+      'student profiles, analytics and chat history for that teacher only — the teacher keeps their own learning access.',
+    fields: {
+      _id: 'ObjectId',
+      classroomId: 'ObjectId',
+      userId: 'ObjectId (the teacher)',
+      monitoringEnabled: 'boolean',
+      permissions: '{ manageMembers, manageSyllabus, monitorStudents, manageAssessments, viewAnalytics }',
+      assignedBy: 'ObjectId',
+      updatedAt: 'Date',
+    },
+    indexes: [{ keys: { classroomId: 1, userId: 1 }, options: { unique: true } }],
+  },
+
+  join_requests: {
+    collection: 'join_requests',
+    description: 'Pending membership requests when joinApprovalRequired is on.',
+    fields: {
+      _id: 'ObjectId',
+      classroomId: 'ObjectId',
+      userId: 'ObjectId',
+      message: 'string',
+      status: "'pending' | 'approved' | 'rejected' | 'cancelled'",
+      decidedBy: 'ObjectId | null',
+      decidedAt: 'Date | null',
+      createdAt: 'Date',
+    },
+    indexes: [
+      { keys: { classroomId: 1, status: 1 } },
+      { keys: { userId: 1, status: 1 } },
+      { keys: { classroomId: 1, userId: 1, status: 1 } },
+    ],
+  },
+
+  syllabuses: {
+    collection: 'syllabuses',
+    description: 'One active syllabus per classroom (versioned). Holds the structured outline + source documents.',
+    fields: {
+      _id: 'ObjectId',
+      classroomId: 'ObjectId',
+      version: 'number',
+      title: 'string',
+      source: "'manual' | 'pdf' | 'docx' | 'pptx'",
+      status: "'draft' | 'active' | 'archived'",
+      subjects: '[{ subjectId, name, order, unitCount, conceptCount }]',
+      materialStats: '{ documents, chunks, tokens }',
+      createdBy: 'ObjectId',
+      createdAt: 'Date',
+      updatedAt: 'Date',
+    },
+    indexes: [{ keys: { classroomId: 1, status: 1 } }],
+  },
+
+  syllabus_units: {
+    collection: 'syllabus_units',
+    description: 'Subject -> Units -> Concepts -> Subtopics hierarchy nodes.',
+    fields: {
+      _id: 'ObjectId',
+      classroomId: 'ObjectId',
+      syllabusId: 'ObjectId',
+      subjectId: 'ObjectId',
+      parentId: 'ObjectId | null',
+      type: "'subject' | 'unit' | 'concept' | 'subtopic'",
+      name: 'string',
+      description: 'string',
+      order: 'number',
+      objectives: '[string]',
+      keywords: '[string]',
+      estimatedMinutes: 'number',
+      createdAt: 'Date',
+    },
+    indexes: [
+      { keys: { classroomId: 1, subjectId: 1, type: 1, order: 1 } },
+      { keys: { classroomId: 1, parentId: 1, order: 1 } },
+    ],
+  },
+
+  syllabus_chunks: {
+    collection: 'syllabus_chunks',
+    description: 'Retrieval corpus: chunks of syllabus/learning material with embeddings for RAG.',
+    fields: {
+      _id: 'ObjectId',
+      classroomId: 'ObjectId',
+      syllabusId: 'ObjectId',
+      conceptId: 'ObjectId | null',
+      documentName: 'string',
+      page: 'number',
+      text: 'string',
+      embedding: '[number] (from Nemotron Embed)',
+      vectorDims: 'number',
+      tokens: 'number',
+      createdAt: 'Date',
+    },
+    indexes: [{ keys: { classroomId: 1, conceptId: 1 } }],
+  },
+
+  learning_sessions: {
+    collection: 'learning_sessions',
+    description:
+      'One fresh session per /start selection. Clearing the visible conversation starts a new session but never ' +
+      'deletes prior sessions, assessments or learning records.',
+    fields: {
+      _id: 'ObjectId',
+      classroomId: 'ObjectId',
+      userId: 'ObjectId',
+      subjectId: 'ObjectId',
+      unitId: 'ObjectId',
+      conceptId: 'ObjectId',
+      mode: "'learn' | 'test' | 'practise' | 'continue'",
+      status: "'active' | 'ended'",
+      startedAt: 'Date',
+      endedAt: 'Date | null',
+      messageCount: 'number',
+      hintsUsed: 'number',
+      scaffoldingLevel: "'guided' | 'supported' | 'independent'",
+      conceptsCovered: '[ObjectId]',
+    },
+    indexes: [
+      { keys: { userId: 1, classroomId: 1, startedAt: -1 } },
+      { keys: { userId: 1, status: 1 } },
+    ],
+  },
+
+  student_learning_profiles: {
+    collection: 'student_learning_profiles',
+    description:
+      'CRITICAL ISOLATION BOUNDARY: exactly one profile per (userId, classroomId). Profiles are never shared ' +
+      'or copied across classrooms.',
+    fields: {
+      _id: 'ObjectId',
+      userId: 'ObjectId',
+      classroomId: 'ObjectId',
+      knowledgeLevel: "'beginner' | 'developing' | 'proficient' | 'advanced'",
+      learningSpeed: '{ label: slow|steady|fast, score: number, samples: number }',
+      independence: '{ score: number, hintsPerSession: number, unaidedSuccessRate: number }',
+      mastery: '[{ conceptId, score, attempts, lastAssessedAt, trend }]',
+      stats: '{ sessions, messages, assessmentsTaken, practicalSolved, totalStudyMinutes, streakDays }',
+      weaknessCounts: '{ knowledgeGap, misconception, practicalDifficulty, repeatedError }',
+      timeline: '[{ date, masteryScore, independenceScore }]',
+      lastActivityAt: 'Date',
+      createdAt: 'Date',
+      updatedAt: 'Date',
+    },
+    indexes: [
+      { keys: { userId: 1, classroomId: 1 }, options: { unique: true } },
+      { keys: { classroomId: 1, lastActivityAt: -1 } },
+    ],
+  },
+
+  knowledge_gaps: {
+    collection: 'knowledge_gaps',
+    description: 'Detected weakness record (also used for misconceptions / practical difficulties via category).',
+    fields: {
+      _id: 'ObjectId',
+      userId: 'ObjectId',
+      classroomId: 'ObjectId',
+      subjectId: 'ObjectId',
+      unitId: 'ObjectId',
+      conceptId: 'ObjectId',
+      topicId: 'string (stable "subject/unit/concept" key)',
+      category: "'knowledge_gap' | 'misconception' | 'practical_difficulty' | 'repeated_error'",
+      description: 'string',
+      evidence: '[{ type, refId, excerpt, at }]',
+      severity: "'low' | 'medium' | 'high' | 'critical'",
+      confidence: 'number 0..1',
+      occurrences: 'number',
+      status: "'open' | 'improving' | 'resolved'",
+      detectedBy: "'ai' | 'rule_engine' | 'assessment' | 'practical'",
+      firstDetectedAt: 'Date',
+      lastDetectedAt: 'Date',
+      resolvedAt: 'Date | null',
+      improvementHistory: '[{ at, severity, confidence, note }]',
+    },
+    indexes: [
+      { keys: { userId: 1, classroomId: 1, status: 1 } },
+      { keys: { classroomId: 1, conceptId: 1, category: 1 } },
+      { keys: { userId: 1, classroomId: 1, topicId: 1, category: 1 } },
+    ],
+  },
+
+  topic_mastery: {
+    collection: 'topic_mastery',
+    description: 'Topic-wise knowledge level per student per classroom, derived from evidence (never self-report).',
+    fields: {
+      _id: 'ObjectId',
+      userId: 'ObjectId',
+      classroomId: 'ObjectId',
+      conceptId: 'ObjectId',
+      unitId: 'ObjectId',
+      subjectId: 'ObjectId',
+      score: 'number 0..100',
+      evidenceCount: 'number',
+      correct: 'number',
+      incorrect: 'number',
+      independentCorrect: 'number',
+      hintedCorrect: 'number',
+      last10: '[{ correct: boolean, hinted: boolean, at }]',
+      level: "'not_started' | 'emerging' | 'developing' | 'secure' | 'mastered'",
+      updatedAt: 'Date',
+    },
+    indexes: [
+      { keys: { userId: 1, classroomId: 1, conceptId: 1 }, options: { unique: true } },
+      { keys: { classroomId: 1, conceptId: 1 } },
+    ],
+  },
+
+  assessments: {
+    collection: 'assessments',
+    description: 'Student-triggered or AI-recommended assessment. AI-recommended ones are optional/postponable.',
+    fields: {
+      _id: 'ObjectId',
+      classroomId: 'ObjectId',
+      conceptId: 'ObjectId',
+      unitId: 'ObjectId',
+      subjectId: 'ObjectId',
+      createdByUserId: 'ObjectId',
+      origin: "'student' | 'ai' | 'teacher'",
+      kind: "'topic_quiz' | 'unit_test' | 'practical' | 'conceptual' | 'revision'",
+      title: 'string',
+      status: "'draft' | 'available' | 'postponed' | 'in_progress' | 'completed' | 'expired'",
+      recommendedReason: 'string',
+      questions: '[{ id, type, prompt, options, correctIndex, rubric, conceptId, difficulty, explanation }]',
+      maxScore: 'number',
+      durationMinutes: 'number',
+      createdAt: 'Date',
+    },
+    indexes: [
+      { keys: { userId: 1, classroomId: 1, createdAt: -1 } },
+      { keys: { userId: 1, status: 1 } },
+    ],
+  },
+
+  assessment_results: {
+    collection: 'assessment_results',
+    description: 'Attempts. Always linked to user + classroom; drives profile updates.',
+    fields: {
+      _id: 'ObjectId',
+      assessmentId: 'ObjectId',
+      userId: 'ObjectId',
+      classroomId: 'ObjectId',
+      conceptIds: '[ObjectId]',
+      answers: '[{ questionId, answer, correct, score, analysis, misconception }]',
+      score: 'number',
+      maxScore: 'number',
+      percentage: 'number',
+      durationSeconds: 'number',
+      hintUsage: 'number',
+      aiFeedback: '{ strengths: [string], gaps: [string], misconceptions: [string], nextSteps: [string] }',
+      submittedAt: 'Date',
+    },
+    indexes: [
+      { keys: { userId: 1, classroomId: 1, submittedAt: -1 } },
+      { keys: { assessmentId: 1 } },
+    ],
+  },
+
+  student_activities: {
+    collection: 'student_activities',
+    description: 'Append-only learning activity feed (per classroom) used for dashboards and streaks.',
+    fields: {
+      _id: 'ObjectId',
+      userId: 'ObjectId',
+      classroomId: 'ObjectId',
+      type: "'session_started' | 'chat_message' | 'assessment_completed' | 'practical_attempted' | 'concept_completed'",
+      title: 'string',
+      meta: 'object',
+      conceptId: 'ObjectId | null',
+      minutes: 'number',
+      createdAt: 'Date',
+    },
+    indexes: [
+      { keys: { userId: 1, classroomId: 1, createdAt: -1 } },
+      { keys: { classroomId: 1, createdAt: -1 } },
+    ],
+  },
+
+  chat_privacy_permissions: {
+    collection: 'chat_privacy_permissions',
+    description:
+      'Student-owned consent. Default: chat visible to nobody but the student. Enforced on the backend for every ' +
+      'request; every change is written to chat_privacy_audit.',
+    fields: {
+      _id: 'ObjectId',
+      userId: 'ObjectId',
+      classroomId: 'ObjectId',
+      shareWithTeachers: 'boolean',
+      shareWithOwner: 'boolean',
+      grantTo: '[ObjectId] (specific teachers)',
+      revokedAt: 'Date | null',
+      updatedAt: 'Date',
+    },
+    indexes: [{ keys: { userId: 1, classroomId: 1 }, options: { unique: true } }],
+  },
+
+  chat_privacy_audit: {
+    collection: 'chat_privacy_audit',
+    description: 'Immutable audit trail of permission grants/revocations and teacher access attempts.',
+    fields: {
+      _id: 'ObjectId',
+      userId: 'ObjectId',
+      classroomId: 'ObjectId',
+      actorId: 'ObjectId',
+      action: "'grant' | 'revoke' | 'access_granted' | 'access_denied'",
+      scope: 'string',
+      ip: 'string',
+      at: 'Date',
+    },
+    indexes: [{ keys: { classroomId: 1, at: -1 } }],
+  },
+
+  chat_messages: {
+    collection: 'chat_messages',
+    description: 'Tutor conversation messages, scoped to user + classroom + session.',
+    fields: {
+      _id: 'ObjectId',
+      sessionId: 'ObjectId',
+      userId: 'ObjectId',
+      classroomId: 'ObjectId',
+      conceptId: 'ObjectId',
+      role: "'user' | 'assistant' | 'system'",
+      content: 'string',
+      meta: '{ kind, scaffoldingLevel, hints, citations: [string], gapDetected, provider, model, tokens, latencyMs }',
+      createdAt: 'Date',
+    },
+    indexes: [
+      { keys: { sessionId: 1, createdAt: 1 } },
+      { keys: { userId: 1, classroomId: 1, createdAt: -1 } },
+    ],
+  },
+
+  ai_config: {
+    collection: 'ai_config',
+    description: 'Singleton global AI provider settings. API keys encrypted with AES-256-GCM.',
+    fields: {
+      _id: "'global'",
+      provider: "'nvidia'",
+      baseUrl: 'string',
+      apiKeyCipher: 'string (AES-256-GCM, never returned)',
+      apiKeyFingerprint: 'string (masked preview)',
+      timeoutMs: 'number',
+      maxRetries: 'number',
+      generation: '{ temperature, topP, maxTokens, stream, jsonMode }',
+      taskOverrides: '{ [task]: { temperature, topP, maxTokens } }',
+      updatedBy: 'ObjectId',
+      updatedAt: 'Date',
+    },
+  },
+
+  ai_models: {
+    collection: 'ai_models',
+    description: 'Model registry incl. verification status against the live NVIDIA catalogue.',
+    fields: {
+      _id: 'ObjectId',
+      provider: 'string',
+      modelId: 'string',
+      displayName: 'string',
+      category: "'chat' | 'reasoning' | 'embedding' | 'rerank' | 'parse' | 'safety' | 'coding'",
+      capabilities: '[string]',
+      availability: "'unknown' | 'available' | 'unavailable'",
+      enabled: 'boolean',
+      params: '{ temperature, topP, maxTokens, timeoutMs }',
+      validatedAt: 'Date | null',
+      validationMessage: 'string',
+    },
+    indexes: [{ keys: { provider: 1, modelId: 1 }, options: { unique: true } }],
+  },
+
+  ai_task_routing: {
+    collection: 'ai_task_routing',
+    description: 'Task -> model mapping editable by admins without code changes.',
+    fields: {
+      _id: 'string (task key)',
+      task: 'string',
+      label: 'string',
+      model: 'string',
+      fallbackModel: 'string',
+      enabled: 'boolean',
+      updatedAt: 'Date',
+    },
+    indexes: [{ keys: { task: 1 }, options: { unique: true } }],
+  },
+
+  ai_feature_flags: {
+    collection: 'ai_feature_flags',
+    description: 'Independent feature toggles; classroom settings can further restrict (never expand) these.',
+    fields: { _id: 'string (feature key)', label: 'string', enabled: 'boolean', description: 'string', updatedAt: 'Date' },
+    indexes: [],
+  },
+
+  ai_usage_logs: {
+    collection: 'ai_usage_logs',
+    description: 'Per-request telemetry: tokens, cost, latency, success, model, task, feature and classroom.',
+    fields: {
+      _id: 'ObjectId',
+      task: 'string',
+      feature: 'string',
+      provider: 'string',
+      model: 'string',
+      userId: 'ObjectId | null',
+      classroomId: 'ObjectId | null',
+      inputTokens: 'number',
+      outputTokens: 'number',
+      costUsd: 'number',
+      latencyMs: 'number',
+      success: 'boolean',
+      error: 'string | null',
+      cached: 'boolean',
+      createdAt: 'Date',
+    },
+    indexes: [
+      { keys: { createdAt: -1 } },
+      { keys: { model: 1, createdAt: -1 } },
+      { keys: { classroomId: 1, createdAt: -1 } },
+    ],
+  },
+
+  practical_exercises: {
+    collection: 'practical_exercises',
+    description: 'Coding/practical exercises with rubric + hidden tests for sandboxed evaluation.',
+    fields: {
+      _id: 'ObjectId',
+      classroomId: 'ObjectId',
+      conceptId: 'ObjectId',
+      title: 'string',
+      language: "'javascript' | 'python' | 'java' | 'sql'",
+      prompt: 'string',
+      starterCode: 'string',
+      tests: '[{ id, name, args, expected, hidden }]',
+      rubric: '[{ id, criterion, weight }]',
+      difficulty: "'easy' | 'medium' | 'hard'",
+      createdBy: "'ai' | 'teacher'",
+      createdAt: 'Date',
+    },
+    indexes: [{ keys: { classroomId: 1, conceptId: 1 } }],
+  },
+
+  code_submissions: {
+    collection: 'code_submissions',
+    description: 'Sandbox execution results per attempt; tracks repeated mistakes and copy-paste signals.',
+    fields: {
+      _id: 'ObjectId',
+      exerciseId: 'ObjectId',
+      userId: 'ObjectId',
+      classroomId: 'ObjectId',
+      conceptId: 'ObjectId',
+      code: 'string',
+      language: 'string',
+      attempt: 'number',
+      passed: 'boolean',
+      testResults: '[{ id, name, passed, output, error }]',
+      staticAnalysis: '{ syntaxErrors, logicWarnings, similarityToSolution, copyPasteSuspected, conceptsUnderstood }',
+      hintsUsed: 'number',
+      createdAt: 'Date',
+    },
+    indexes: [
+      { keys: { userId: 1, classroomId: 1, createdAt: -1 } },
+      { keys: { exerciseId: 1, userId: 1 } },
+    ],
+  },
+
+  audit_logs: {
+    collection: 'audit_logs',
+    description: 'Security-relevant actions: role changes, permission changes, privacy access, config edits.',
+    fields: {
+      _id: 'ObjectId',
+      actorId: 'ObjectId',
+      classroomId: 'ObjectId | null',
+      action: 'string',
+      target: 'string',
+      meta: 'object',
+      ip: 'string',
+      at: 'Date',
+    },
+    indexes: [{ keys: { classroomId: 1, at: -1 } }, { keys: { actorId: 1, at: -1 } }],
+  },
+};
+
+export const COLLECTION_NAMES = Object.fromEntries(
+  Object.entries(SCHEMAS).map(([k, v]) => [k, v.collection]),
+);
