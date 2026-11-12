@@ -175,6 +175,27 @@ function costOf(model, usage) {
  * Core JSON-producing AI call.
  * @returns {{ data: any, meta: { provider, model, latencyMs, tokens, cached, simulated, fallbackUsed } }}
  */
+/**
+ * Run a task through the deterministic analyser, ignoring the provider entirely.
+ *
+ * The last line of defence for a flow that MUST produce a usable result: a model
+ * can answer 200 with malformed JSON, or with JSON that parses but contains
+ * nothing usable. Without this, that becomes an error dialog for the learner for
+ * a reason that has nothing to do with them.
+ */
+export async function runJsonTaskLocally(task, { messages = [], meta = {} } = {}) {
+  const local = new LocalProvider();
+  const res = await local.chat({
+    model: 'local',
+    messages,
+    meta: { ...meta, task: meta.task || task },
+  });
+  return {
+    data: extractJson(res.text) ?? res.text,
+    meta: { provider: 'local', model: res.model, latencyMs: res.latencyMs, tokens: res.usage, fallbackUsed: true },
+  };
+}
+
 export async function runJsonTask(
   task,
   { messages, meta = {}, feature, userId, classroomId, cacheable = false, signal, pinModel, timeoutMs } = {},
