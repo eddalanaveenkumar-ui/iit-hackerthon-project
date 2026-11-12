@@ -873,6 +873,34 @@ async function main() {
     'every tutor reply carries the intelligence block the rail reads',
   );
 
+  section('16d. Response latency budget — a chat turn must not time out');
+
+  // A serverless function has a hard wall (vercel.json maxDuration). If the AI
+  // call is allowed to run as long as the function itself, a slow upstream kills
+  // the request at the platform edge with a gateway 504 and no diagnosis. The
+  // two budgets must be ordered: model call < function.
+  const { default: config } = await import('../src/config/index.js');
+  const fs = await import('node:fs/promises');
+  const vercelCfg = JSON.parse(await fs.readFile(new URL('../vercel.json', import.meta.url), 'utf8'));
+  const fnSeconds = vercelCfg.functions['api/index.js'].maxDuration;
+  ok(typeof fnSeconds === 'number' && fnSeconds >= 60, `the function budget is explicit (${fnSeconds}s)`);
+  ok(
+    config.ai.requestTimeoutMs < fnSeconds * 1000,
+    `the model timeout (${config.ai.requestTimeoutMs}ms) leaves room inside the function (${fnSeconds}s)`,
+  );
+  ok(
+    config.ai.requestTimeoutMs <= 45_000,
+    'a learner waits at most 45s before the app reports a slow model',
+  );
+
+  // Content moderation must not add a model round trip to an ordinary message.
+  // It is gated by a keyword pre-screen: harmless coursework skips the call, and
+  // anything that trips it still goes to the model.
+  const tutorRoutes = await fs.readFile(new URL('../src/modules/tutor/routes.js', import.meta.url), 'utf8');
+  ok(/MODERATION_HINTS\.test\(data\.content\)/.test(tutorRoutes),
+    'moderation only calls the model when the pre-screen matches');
+  ok(/timeoutMs:\s*8000/.test(tutorRoutes), 'the screening call has its own short deadline');
+
   section('16e. Vision — reading a photo of student work');
   const visionCaps = await api('/api/ai/vision/capabilities', { token: naveen.token });
   ok(visionCaps.status === 200, 'vision capabilities are reported');
