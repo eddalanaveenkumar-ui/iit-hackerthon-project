@@ -106,6 +106,21 @@ jobs:
                 printf '%s\n' "$failing" | head -15 | while IFS= read -r line; do
                   echo "::error title=Live contract failure::${line#  • }"
                 done
+              else
+                # No per-check report means the suite died instead of finishing
+                # (a network error, an uncaught exception, a broken payload).
+                # That is a different failure and needs different triage, so say
+                # so explicitly rather than reporting "0 failures".
+                echo "### Suite did not complete"
+                echo ""
+                echo "No check report was produced — it crashed. Last output:"
+                echo ""
+                echo '```'
+                tail -n 25 /tmp/contract.log
+                echo '```'
+                tail -n 6 /tmp/contract.log | while IFS= read -r line; do
+                  echo "::error title=Live contract suite crashed::${line}"
+                done
               fi
             else
               echo "The suite did not run."
