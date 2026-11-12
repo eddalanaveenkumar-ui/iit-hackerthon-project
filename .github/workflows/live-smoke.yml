@@ -99,6 +99,13 @@ jobs:
                 echo "### Failing checks"
                 echo ""
                 echo "$failing"
+                # Also surface each failure as an annotation. The step summary
+                # needs a signed-in browser to read; annotations are readable
+                # over the API, which is what an agent investigating a red run
+                # actually has access to.
+                printf '%s\n' "$failing" | head -15 | while IFS= read -r line; do
+                  echo "::error title=Live contract failure::${line#  • }"
+                done
               fi
             else
               echo "The suite did not run."
