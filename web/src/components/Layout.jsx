@@ -1,17 +1,18 @@
 import { useEffect, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { ChevronDown, GraduationCap, LogOut, MessageSquare, Moon, Settings, ShieldCheck, Sun } from 'lucide-react';
+import { ChevronDown, GraduationCap, LogOut, Menu, Moon, Settings, ShieldCheck, Sun } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { Avatar, cx } from './ui';
+import { Sidebar, SidebarDrawer } from './Sidebar';
 
 /**
- * Deliberately minimal shell.
+ * App shell: persistent navigation rail plus a chat-width content column.
  *
- * The product is a chat, so navigation is not a permanent sidebar — it is a
- * secondary surface behind the avatar menu. Only surfaces that are *not* part of
- * the conversation (account, admin) live here; everything else is a command
- * inside the chat (`/start`, `/classrooms`, `/progress` …).
+ * The rail carries what a learner navigates to repeatedly — the conversation,
+ * their learning profile (classrooms, account), classroom creation and the chat
+ * archive. Commands inside the chat (`/start`, `/help`) remain for power users;
+ * the sidebar means nobody has to memorise them.
  */
 
 /** Pages that are not the chat get a back affordance instead of a menu. */
@@ -22,17 +23,20 @@ const SECONDARY = {
   '/app/assessments': 'Assessments',
   '/app/progress': 'Progress',
   '/app/settings': 'Settings',
+  '/app/history': 'Chat history',
 };
 
 export default function Layout() {
   const { user, logout } = useAuth();
   const { theme, toggle } = useTheme();
   const [menu, setMenu] = useState(false);
+  const [drawer, setDrawer] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
 
   useEffect(() => {
     setMenu(false);
+    setDrawer(false);
   }, [location.pathname]);
 
   const secondaryLabel =
@@ -41,10 +45,21 @@ export default function Layout() {
     (location.pathname.startsWith('/app/admin') ? 'AI configuration' : null);
 
   return (
-    <div className="flex min-h-screen flex-col bg-slate-50 dark:bg-slate-950">
-      <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-slate-50/85 backdrop-blur dark:border-slate-800/70 dark:bg-slate-950/85">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
+      <Sidebar user={user} />
+      <SidebarDrawer open={drawer} onClose={() => setDrawer(false)} user={user} />
+
+      <div className="flex min-h-screen flex-col lg:pl-64">
+        <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-slate-50/85 backdrop-blur dark:border-slate-800/70 dark:bg-slate-950/85">
         <div className="mx-auto flex h-14 w-full max-w-4xl items-center gap-2 px-3 sm:px-4">
-          <Link to="/app" className="flex items-center gap-2 rounded-lg py-1 pr-2">
+          <button
+            onClick={() => setDrawer(true)}
+            className="btn-ghost -ml-1 p-1.5 lg:hidden"
+            aria-label="Open navigation"
+          >
+            <Menu className="h-5 w-5" />
+          </button>
+          <Link to="/app" className="flex items-center gap-2 rounded-lg py-1 pr-2 lg:hidden">
             <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-600 text-white">
               <GraduationCap className="h-4.5 w-4.5" />
             </span>
@@ -81,7 +96,6 @@ export default function Layout() {
                     <p className="truncate text-sm font-medium text-slate-900 dark:text-white">{user?.name}</p>
                     <p className="truncate text-xs text-slate-500 dark:text-slate-400">{user?.email}</p>
                   </div>
-                  <MenuLink to="/app" icon={MessageSquare} label="Back to chat" onDone={() => setMenu(false)} />
                   <MenuLink to="/app/classrooms" icon={GraduationCap} label="My classrooms" onDone={() => setMenu(false)} />
                   <MenuLink to="/app/settings" icon={Settings} label="Account settings" onDone={() => setMenu(false)} />
                   {user?.role === 'admin' ? (
@@ -103,9 +117,10 @@ export default function Layout() {
         </div>
       </header>
 
-      <main className={cx('mx-auto w-full flex-1 px-3 sm:px-4', isChat(location.pathname) ? 'max-w-4xl py-3' : 'max-w-[1200px] py-5')}>
-        <Outlet />
-      </main>
+        <main className={cx('mx-auto w-full flex-1 px-3 sm:px-4', isChat(location.pathname) ? 'max-w-4xl py-3' : 'max-w-[1200px] py-5')}>
+          <Outlet />
+        </main>
+      </div>
     </div>
   );
 }

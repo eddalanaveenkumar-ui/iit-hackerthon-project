@@ -87,7 +87,17 @@ there is one interaction model instead of a navigation tree plus wizards.
   (**learn / test / practise / continue**) entirely inside the thread.
 - `/classrooms`, `/practice`, `/assessments`, `/progress`, `/settings` open the other surfaces.
 - `/help` lists every command. Press `/` for a command palette.
-- Only account and admin surfaces sit behind the avatar menu.
+
+A persistent **sidebar** carries the destinations a learner returns to, so the commands are a
+shortcut rather than a requirement:
+
+- **Chat** — the conversation.
+- **Learning profile** — *My classrooms* and *Account settings*.
+- **Create classroom**.
+- **Chat history** — the six most recent sessions inline, plus *View all history* (`/app/history`),
+  grouped by day and keyset-paginated. Sessions are never deleted, so this is a complete archive.
+
+On mobile the rail becomes a drawer opened from the header.
 
 ### The learning flow
 - Every session starts a **fresh chat** without deleting prior records, so history stays intact.

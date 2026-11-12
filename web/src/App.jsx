@@ -18,6 +18,7 @@ const Monitoring = lazy(() => import('./pages/Monitoring'));
 const StudentProfile = lazy(() => import('./pages/StudentProfile'));
 const ChatPrivacy = lazy(() => import('./pages/ChatPrivacy'));
 const Settings = lazy(() => import('./pages/Settings'));
+const HistoryPage = lazy(() => import('./pages/History'));
 const AIConfig = lazy(() => import('./pages/admin/AIConfig'));
 const NotFound = lazy(() => import('./pages/NotFound'));
 
@@ -76,6 +77,7 @@ export default function App() {
           <Route path="classrooms/:classroomId/privacy" element={<ChatPrivacy />} />
 
           <Route path="tutor/:sessionId" element={<TutorSession />} />
+          <Route path="history" element={<HistoryPage />} />
           <Route path="practice" element={<Practice />} />
           <Route path="practice/:classroomId" element={<Practice />} />
           <Route path="assessments" element={<Assessments />} />

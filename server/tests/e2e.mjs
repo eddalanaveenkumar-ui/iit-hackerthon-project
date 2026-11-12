@@ -687,6 +687,31 @@ async function main() {
   ok(Array.isArray(persisted?.meta?.visuals) && persisted.meta.visuals.length === visuals.length,
     'visuals are persisted with the message, so history re-renders them');
 
+  section('16d. Chat history (sidebar archive)');
+  const history = await api('/api/tutor/sessions?limit=10', { token: naveen.token });
+  ok(history.status === 200, 'learner can read their chat history');
+  ok(Array.isArray(history.body.sessions) && history.body.sessions.length > 0, 'history lists past sessions');
+  ok(history.body.sessions.every((s) => s.id && s.startedAt), 'each entry has an id and a start time');
+  ok(history.body.sessions.every((s) => s.concept?.name && s.classroom?.name), 'entries resolve concept and classroom names');
+  const sortedDesc = history.body.sessions.every((s, i, arr) => i === 0 || new Date(arr[i - 1].startedAt) >= new Date(s.startedAt));
+  ok(sortedDesc, 'history is newest first');
+  ok(typeof history.body.hasMore === 'boolean', 'history reports whether more pages exist');
+
+  const scoped = await api(`/api/tutor/sessions?limit=10&classroomId=${javaClass.id}`, { token: naveen.token });
+  ok(scoped.body.sessions.every((s) => s.classroom.id === String(javaClass.id)), 'history can be filtered by classroom');
+
+  // A learner must never see another learner's conversations through this route,
+  // even when they ask for a large page.
+  const otherHistory = await api('/api/tutor/sessions?limit=100', { token: meera.token });
+  const otherIds = new Set(otherHistory.body.sessions.map((s) => s.id));
+  const naveenIds = new Set(history.body.sessions.map((s) => s.id));
+  const leaked = [...otherIds].filter((id) => naveenIds.has(id));
+  ok(leaked.length === 0, `history never returns another learner's sessions (${leaked.length} leaked)`);
+  ok(otherHistory.body.sessions.every((s) => s.id), 'the other learner sees their own archive');
+
+  const unauthHistory = await api('/api/tutor/sessions?limit=5');
+  ok(unauthHistory.status === 401, 'chat history requires authentication');
+
   section('17. Cross-classroom data isolation under attack');
   const foreignConcept = mlProfile.body.mastery[0]?.conceptId;
   const attack = await api('/api/tutor/sessions', {
