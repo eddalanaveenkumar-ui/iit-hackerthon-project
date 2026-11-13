@@ -38,19 +38,32 @@ export default function Markdown({ text, className = '' }) {
           </a>
         );
       },
-      // Code: monospace block, no execution, no highlighting service.
-      code({ inline, children, className: codeClass, ...props }) {
-        if (inline) {
+      // Code: monospace, never executed, no highlighting service.
+      //
+      // react-markdown v10 removed the `inline` flag this used to branch on, so
+      // every inline code span fell through to the block branch and rendered a
+      // `<pre>` in the middle of a sentence — which is why "Type `code` for a
+      // question" broke across three lines. Inline is now detected from the
+      // node: a span inside a `pre` is a block, everything else is inline.
+      code({ className: codeClass, children, ...props }) {
+        // Two signals, both reliable in v10: a fenced block names its language
+        // (`language-python`), and a fence containing more than one line has a
+        // newline in its text. An inline span has neither.
+        const isBlock = Array.isArray(codeClass)
+          ? codeClass.some((name) => String(name).startsWith('language-'))
+          : typeof codeClass === 'string' && codeClass.startsWith('language-');
+        const multiline = String(children ?? '').includes('\n');
+        if (isBlock || multiline) {
           return (
-            <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[12.5px] dark:bg-slate-800" {...props}>
-              {children}
-            </code>
+            <pre className="overflow-x-auto rounded-lg bg-slate-900 p-3 text-[12.5px] leading-relaxed text-slate-100 dark:bg-slate-950">
+              <code {...props}>{children}</code>
+            </pre>
           );
         }
         return (
-          <pre className={codeClass}>
-            <code>{children}</code>
-          </pre>
+          <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[12.5px] dark:bg-slate-800" {...props}>
+            {children}
+          </code>
         );
       },
       table({ children }) {

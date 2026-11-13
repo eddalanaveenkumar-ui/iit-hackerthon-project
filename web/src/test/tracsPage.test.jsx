@@ -176,6 +176,47 @@ describe('tracs — exactly two commands', () => {
   });
 });
 
+describe('tracs — when a command fails', () => {
+  it('shows a readable timeout message and NOT a blank document', async () => {
+    const user = userEvent.setup();
+    const timeout = Object.assign(new Error('Request failed (504)'), { status: 504 });
+    apiMock.mockImplementation((path, options) => {
+      if (path === '/tracs/sess1' && !options) return Promise.resolve({ session: SESSION, open_question: null });
+      if (String(path).endsWith('/turn')) return Promise.reject(timeout);
+      return Promise.resolve({});
+    });
+
+    renderPage();
+    await screen.findAllByText('Data Structures');
+    await user.click(screen.getAllByRole('button', { name: /\/learn/i })[0]);
+
+    // The learner is told what happened and what to do, in their words.
+    expect(await screen.findByText(/took too long/i)).toBeInTheDocument();
+    expect(screen.getByText(/send \/learn again/i)).toBeInTheDocument();
+
+    // And critically: no "This lesson could not be displayed". An empty
+    // document was previously rendered alongside the error, which read as a
+    // broken app rather than a slow request.
+    expect(screen.queryByText(/could not be displayed/i)).toBeNull();
+  });
+
+  it('does not claim a document failed when no document was sent', async () => {
+    const user = userEvent.setup();
+    apiMock.mockImplementation((path, options) => {
+      if (path === '/tracs/sess1' && !options) return Promise.resolve({ session: SESSION, open_question: null });
+      if (String(path).endsWith('/turn')) return Promise.reject(Object.assign(new Error('nope'), { status: 500 }));
+      return Promise.resolve({});
+    });
+
+    renderPage();
+    await screen.findAllByText('Data Structures');
+    await user.click(screen.getAllByRole('button', { name: /\/test/i })[0]);
+
+    expect(await screen.findByText(/could not be completed/i)).toBeInTheDocument();
+    expect(screen.queryByText(/could not be displayed/i)).toBeNull();
+  });
+});
+
 describe('tracs — answering a question', () => {
   it('submits the chosen answer as a /test turn', async () => {
     const user = userEvent.setup();
