@@ -67,9 +67,12 @@ export function say(content, { tone } = {}) {
  * payload the backend can grade.
  */
 export function oneQuestionForm({ question, topic, index, total, sessionId }) {
-  const id = `q_${question.id || encoder()}`;
+  // The question keeps its own id. The renderer echoes back the id it was
+  // shown, and the session is matched against the id it stored — rewriting it
+  // here would make every answer look stale.
+  const id = String(question.id || `q${encoder()}`).slice(0, 64);
   return {
-    id: `form_${sessionId || 's'}_${id}`,
+    id: `form_${sessionId || 's'}_${id}`.slice(0, 80),
     type: 'question_form',
     title: topic ? `${topic.title} — question ${index} of ${total}` : `Question ${index} of ${total}`,
     description: question.question,
@@ -559,9 +562,28 @@ Previous attempt used: ${(previous?.components || []).join(', ') || 'unknown'}. 
 
   const repaired = data ? repairUiDocument(normalizeDocument(data), { minComponents: 1 }) : null;
   if (repaired) {
-    return { document: repaired.document, source: 'model' };
+    return { document: withoutAuthoredForms(repaired.document), source: 'model' };
   }
   return { document: localExplanation(topic, { reTeach }), source: 'local' };
+}
+
+/**
+ * Drop any question form the model wrote into its explanation.
+ *
+ * tracs owns the checking loop: the checks are authored separately, asked one at
+ * a time, and graded against a stored record. A form baked into the explanation
+ * would ask several questions at once and its answers would have nothing to be
+ * graded against — so it is removed rather than merged.
+ */
+function withoutAuthoredForms(document) {
+  return {
+    ...document,
+    components: (document.components || [])
+      .filter((component) => component.type !== 'question_form' && component.type !== 'form')
+      .map((component) => (component.type === 'layout'
+        ? { ...component, children: (component.children || []).filter((child) => child.type !== 'question_form' && child.type !== 'form') }
+        : component)),
+  };
 }
 
 /** Model output may arrive wrapped; the repairer wants the bare document. */

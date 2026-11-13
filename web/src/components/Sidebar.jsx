@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, NavLink, useLocation } from 'react-router-dom';
 import {
   ChevronDown,
+  FileText,
   GraduationCap,
   History,
   Lightbulb,
@@ -71,6 +72,7 @@ export function SidebarContent({ onNavigate, user }) {
         <div className="space-y-0.5">
           <SideLink to="/app" end icon={MessageSquare} label="Chat" onNavigate={onNavigate} />
           <SideLink to="/app/lesson" icon={Lightbulb} label="Interactive lesson" onNavigate={onNavigate} />
+          <SideLink to="/app/tracs" icon={FileText} label="tracs" onNavigate={onNavigate} />
         </div>
 
         <Group label="Learning profile">

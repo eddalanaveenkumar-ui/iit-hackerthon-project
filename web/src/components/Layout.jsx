@@ -20,6 +20,7 @@ const SECONDARY = {
   '/app/classrooms': 'Classrooms',
   '/app/classrooms/new': 'New classroom',
   '/app/lesson': 'Lesson',
+  '/app/tracs': 'tracs',
   '/app/practice': 'Practice',
   '/app/assessments': 'Assessments',
   '/app/progress': 'Progress',

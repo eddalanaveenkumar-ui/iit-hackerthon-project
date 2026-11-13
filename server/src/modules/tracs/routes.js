@@ -452,8 +452,12 @@ router.post(
       pending.results = [...(pending.results || []).filter((r) => r.question_id !== question.id), { question_id: question.id, ...graded }];
 
       const assessment = assessUnderstanding(pending.results);
+      // Every check has now been attempted exactly once. If any was missed, stop
+      // asking and re-teach — that is the whole point of the checks, and asking
+      // an already-answered question a second time would just repeat it.
+      const allAttempted = pending.questions.every((q) => pending.results.some((r) => r.question_id === q.id));
 
-      if (!assessment.understood && assessment.total >= pending.questions.length) {
+      if (!assessment.understood && allAttempted) {
         // Missed the checks: repeat the explanation, differently.
         const reTeach = await authorExplanation({
           topic: target,
@@ -484,6 +488,11 @@ router.post(
           detectedBy: 'ai',
         }).catch(() => {});
 
+        // Re-check with a fresh set, so the second round tests the re-teach
+        // rather than the explanation that just failed.
+        const fresh = await authorChecks({ topic: target, explanation: reTeach.document, count: CHECK_COUNT, userId: req.userId });
+        session.pendingChecks = { topicId: target.id, questions: fresh, results: [], startedAt: now.toISOString() };
+
         await saveSession(session);
         return res.json({
           command: 'learn',
@@ -491,8 +500,8 @@ router.post(
           document: makeDocument([
             say(`You got **${assessment.correct} of ${assessment.total}** checks. That is not quite there yet, so here is the explanation again — a different way round this time.`, { tone: 'warning' }),
             ...(reTeach.document.components || []),
-            say('Let me check again with two fresh questions.'),
-            oneQuestionForm({ question: pending.questions[0], topic: target, index: 1, total: pending.questions.length, sessionId: String(session._id) }),
+            say('Let me check again with fresh questions.'),
+            oneQuestionForm({ question: fresh[0], topic: target, index: 1, total: fresh.length, sessionId: String(session._id) }),
           ], { responseType: 'educational_tutorial', topic: target.title }),
           session: sessionView(session),
           assessment,
@@ -500,9 +509,22 @@ router.post(
       }
 
       if (!assessment.understood) {
-        // Still mid-check: ask the next one.
+        // Still mid-check: ask the next one that has not been answered.
         const nextIndex = pending.questions.findIndex((q) => !pending.results.some((r) => r.question_id === q.id));
-        const question = pending.questions[Math.max(nextIndex, 0)];
+        // `findIndex` returns -1 when every question is answered; in that case
+        // there is nothing left to ask, and the branch above has already
+        // handled it.
+        if (nextIndex === -1) {
+          await saveSession(session);
+          return res.json({
+            command: 'learn',
+            outcome: 'check',
+            document: makeDocument([say('Those checks are done. Use `/test` for a question, or `/learn` to move on.')]),
+            session: sessionView(session),
+            assessment,
+          });
+        }
+        const question = pending.questions[nextIndex];
         await saveSession(session);
         return res.json({
           command: 'learn',
