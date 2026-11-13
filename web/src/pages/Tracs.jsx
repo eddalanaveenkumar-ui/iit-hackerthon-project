@@ -40,6 +40,41 @@ const COMMANDS = [
   { command: '/learn', label: '/learn', hint: 'An explanation, then checks', icon: BookOpen },
 ];
 
+/**
+ * Turn a failed request into something a learner can act on.
+ *
+ * A 504 on `/learn` is the common failure here: authoring an explanation plus
+ * its checking questions takes longer than a serverless gateway will wait. The
+ * generic message ("Request failed (504)") reads like a bug in the page, when in
+ * fact the work was likely done and only the reply was lost. Saying so — and
+ * offering a retry that asks again — is the difference between "this is broken"
+ * and "this timed out, try once more".
+ */
+function describeTurnFailure(error) {
+  const status = Number(error?.status || 0);
+  const slow = status === 504 || status === 502 || status === 408 || error?.code === 'ABORTED';
+
+  if (slow) {
+    return {
+      title: 'That took too long and the connection was closed.',
+      detail: 'Explanations are the slowest thing tracs does. Send /learn again — the work is often already saved, so the second attempt is quicker.',
+    };
+  }
+  if (status === 401 || status === 403) {
+    return { title: 'You are not signed in for this session.', detail: 'Sign in again, then reopen tracs from the sidebar.' };
+  }
+  if (status === 404) {
+    return { title: 'This session no longer exists.', detail: 'It may have been deleted in another tab. Start a new one from the tracs page.' };
+  }
+  if (status === 0) {
+    return { title: 'The server did not respond.', detail: 'Check your connection and send the command again.' };
+  }
+  return {
+    title: 'That command could not be completed.',
+    detail: error?.message || 'Try again, or send the other command.',
+  };
+}
+
 /** A small labelled block used in the syllabus sidebar. */
 function MasteryDot({ level }) {
   const tones = [
@@ -237,13 +272,25 @@ function ChatMessage({ entry, actions, onFollowUp, busy }) {
                 {entry.command}
               </p>
             ) : null}
-            <DynamicRenderer document={entry.document} actions={actions} onFollowUp={onFollowUp} busy={busy} />
+            {entry.document ? (
+              <DynamicRenderer document={entry.document} actions={actions} onFollowUp={onFollowUp} busy={busy} />
+            ) : null}
           </>
         )}
         {entry.error ? (
-          <p role="alert" className="mt-2 rounded-lg bg-rose-50 px-2.5 py-2 text-xs text-rose-700 dark:bg-rose-950/40 dark:text-rose-200">
-            {entry.error}
-          </p>
+          <div role="alert" className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800 dark:border-rose-900/60 dark:bg-rose-950/40 dark:text-rose-200">
+            <p className="font-medium">{entry.error.title}</p>
+            <p className="mt-0.5 text-rose-700/90 dark:text-rose-300/90">{entry.error.detail}</p>
+            {entry.error.retry ? (
+              <button
+                type="button"
+                onClick={entry.error.retry}
+                className="mt-1.5 rounded border border-rose-300 px-2 py-0.5 font-medium text-rose-800 transition-colors hover:bg-rose-100 dark:border-rose-800 dark:text-rose-200 dark:hover:bg-rose-900/60"
+              >
+                Try again
+              </button>
+            ) : null}
+          </div>
         ) : null}
       </div>
     </div>
@@ -388,7 +435,7 @@ export default function Tracs() {
       } catch (err) {
         setMessages((current) => [
           ...current.filter((entry) => !entry.pending),
-          { id: `e-${stamp}`, role: 'assistant', error: err.message || 'That turn failed.', document: { components: [] } },
+          { id: `e-${stamp}`, role: 'assistant', error: describeTurnFailure(err), document: null },
         ]);
         return { ok: false, reason: err.message };
       } finally {
@@ -472,8 +519,11 @@ export default function Tracs() {
         {
           id: `r-${Date.now()}`,
           role: 'assistant',
-          error: 'Only /test and /learn are available here. Use /test for a question, or /learn for an explanation and checks.',
-          document: { components: [] },
+          error: {
+            title: 'Only /test and /learn are available here.',
+            detail: 'Use /test for a question, or /learn for an explanation followed by checks.',
+          },
+          document: null,
         },
       ]);
       setInput('');

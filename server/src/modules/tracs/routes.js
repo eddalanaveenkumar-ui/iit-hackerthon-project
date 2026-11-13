@@ -458,14 +458,20 @@ router.post(
       const allAttempted = pending.questions.every((q) => pending.results.some((r) => r.question_id === q.id));
 
       if (!assessment.understood && allAttempted) {
-        // Missed the checks: repeat the explanation, differently.
-        const reTeach = await authorExplanation({
-          topic: target,
-          syllabusExcerpt: excerptFor(session, target),
-          userId: req.userId,
-          reTeach: true,
-          previous: { components: (session.lastExplanation?.components || []) },
-        });
+        // Missed the checks: repeat the explanation, differently. The fresh
+        // checks run alongside the re-teach rather than after it, for the same
+        // reason as a first `/learn` — two sequential model calls is a gateway
+        // timeout waiting to happen.
+        const [reTeach, fresh] = await Promise.all([
+          authorExplanation({
+            topic: target,
+            syllabusExcerpt: excerptFor(session, target),
+            userId: req.userId,
+            reTeach: true,
+            previous: { components: (session.lastExplanation?.components || []) },
+          }),
+          authorChecks({ topic: target, explanation: null, count: CHECK_COUNT, userId: req.userId }),
+        ]);
         const missed = assessment.missed.map((m) => `- ${m.feedback}${m.misconception ? ` (${m.misconception})` : ''}`).join('\n');
         session.pendingChecks = null;
         session.mode = 'learn';
@@ -490,7 +496,6 @@ router.post(
 
         // Re-check with a fresh set, so the second round tests the re-teach
         // rather than the explanation that just failed.
-        const fresh = await authorChecks({ topic: target, explanation: reTeach.document, count: CHECK_COUNT, userId: req.userId });
         session.pendingChecks = { topicId: target.id, questions: fresh, results: [], startedAt: now.toISOString() };
 
         await saveSession(session);
@@ -564,19 +569,28 @@ router.post(
     }
 
     /* --- a fresh /learn: explain, then check --------------------------- */
-    const explanation = await authorExplanation({
-      topic: target,
-      syllabusExcerpt: excerptFor(session, target),
-      userId: req.userId,
-      reTeach: session.teachTopicId === target.id,
-    });
-
-    const checks = await authorChecks({
-      topic: target,
-      explanation: explanation.document,
-      count: CHECK_COUNT,
-      userId: req.userId,
-    });
+    // These are two independent model calls and each can take many seconds.
+    // Running them in parallel keeps `/learn` inside a serverless gateway's
+    // timeout; running them in sequence was a 504 in disguise on a cold start.
+    //
+    // The checks do lose the explanation's own structure as a hint, so they are
+    // authored from the topic instead — which is what `authorChecks` falls back
+    // to when it is not given a document, and it still produces answerable
+    // questions about the topic just taught.
+    const [explanation, checks] = await Promise.all([
+      authorExplanation({
+        topic: target,
+        syllabusExcerpt: excerptFor(session, target),
+        userId: req.userId,
+        reTeach: session.teachTopicId === target.id,
+      }),
+      authorChecks({
+        topic: target,
+        explanation: null,
+        count: CHECK_COUNT,
+        userId: req.userId,
+      }),
+    ]);
 
     session.mode = 'learn';
     session.teachTopicId = target.id;

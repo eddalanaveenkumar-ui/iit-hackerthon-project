@@ -650,13 +650,23 @@ export function localExplanation(topic, { reTeach = false } = {}) {
  * just shown rather than something adjacent to it.
  */
 export async function authorChecks({ topic, explanation, count = CHECK_COUNT, userId }) {
-  const headings = (explanation?.components || [])
+  // What the checks should test. When the explanation is supplied it is the best
+  // source — the checks then probe what was actually shown. When it is not
+  // (because the two calls run in parallel to stay inside a gateway timeout) the
+  // topic's own syllabus excerpt is used instead, which is still a fair basis
+  // for asking whether the idea landed.
+  const fromExplanation = (explanation?.components || [])
     .flatMap((component) => {
       if (component.type === 'learning') return [component.title, ...(component.sections || []).map((s) => s.heading)];
       if (component.type === 'text') return [String(component.content || '').slice(0, 120)];
       if (component.type === 'card_group') return (component.items || []).map((i) => i.title);
       return [];
     })
+    .filter(Boolean);
+
+  const headings = (fromExplanation.length
+    ? fromExplanation
+    : [topic.title, ...(topic.keywords || []), String(topic.summary || '').slice(0, 160)])
     .filter(Boolean)
     .slice(0, 8);
 
@@ -686,10 +696,11 @@ Return ONLY JSON: {"questions":[{"question":"…","type":"radio","options":["…
   const questions = raw.slice(0, count).map((q) => normaliseQuestion(q, localQuestion(topic, { attempt: 1 }), topic));
   if (questions.length) return questions;
 
-  // A deterministic check that still tests understanding: restate the idea in
-  // your own words. It is graded by the prose evaluator, so "I don't know" is
-  // correctly treated as not understood.
-  return [
+  // A deterministic fallback that still tests understanding: restate the idea,
+  // then apply it. It is graded by the prose evaluator, so "I don't know" is
+  // correctly treated as not understood. Two questions so a single lucky guess
+  // cannot close the loop.
+  const fallback = [
     {
       id: `q${encoder()}`,
       type: 'textarea',
@@ -697,7 +708,15 @@ Return ONLY JSON: {"questions":[{"question":"…","type":"radio","options":["…
       placeholder: 'Two or three sentences is enough…',
       source: 'local',
     },
+    {
+      id: `q${encoder()}`,
+      type: 'text_input',
+      question: `Give one example where "${topic.title}" matters, and say what would happen without it.`,
+      placeholder: 'One sentence is enough…',
+      source: 'local',
+    },
   ];
+  return fallback.slice(0, Math.max(1, count));
 }
 
 /**
