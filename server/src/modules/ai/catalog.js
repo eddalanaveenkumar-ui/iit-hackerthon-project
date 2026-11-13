@@ -150,6 +150,22 @@ export const AI_TASKS = [
     feature: 'tutoring',
   },
   {
+    key: 'ui_authoring',
+    label: 'Dynamic lesson authoring',
+    description: 'Writes the JSON UI document (components, practice, checks) that the client renders as a lesson.',
+    defaultModel: 'nvidia/nemotron-3-ultra-550b-a55b',
+    defaultFallback: 'nvidia/nemotron-3.5-lightning-30b-a3b',
+    feature: 'dynamic_ui',
+  },
+  {
+    key: 'ui_evaluation',
+    label: 'Answer evaluation',
+    description: 'Grades a submitted question form and decides the next teaching step.',
+    defaultModel: 'nvidia/nemotron-3-ultra-550b-a55b',
+    defaultFallback: 'nvidia/nemotron-3.5-lightning-30b-a3b',
+    feature: 'dynamic_ui',
+  },
+  {
     key: 'complex_reasoning',
     label: 'Complex reasoning',
     description: 'Teaching-plan synthesis, multi-step diagnostics, adaptive strategy selection.',
@@ -250,6 +266,7 @@ export const FEATURE_DEFINITIONS = [
   { key: 'syllabus_retrieval', label: 'Syllabus retrieval', description: 'RAG over uploaded classroom material.', category: 'learning', defaultEnabled: true },
   { key: 'code_analysis', label: 'Code analysis', description: 'Static + AI analysis of practical submissions.', category: 'practical', defaultEnabled: true },
   { key: 'content_moderation', label: 'Content moderation', description: 'Safety filtering of chat content.', category: 'safety', defaultEnabled: true },
+  { key: 'dynamic_ui', label: 'Dynamic UI lessons', description: 'AI-authored interactive lesson documents (components, quizzes, code practice, question forms).', category: 'learning', defaultEnabled: true },
 ];
 
 export const MODEL_PRICING = Object.fromEntries(

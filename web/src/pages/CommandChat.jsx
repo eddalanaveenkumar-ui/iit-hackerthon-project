@@ -21,6 +21,7 @@ const MODES = [
 
 const COMMANDS = [
   { cmd: '/start', label: 'Start a learning session', icon: Sparkles, description: 'Pick classroom, subject, unit, concept and mode' },
+  { cmd: '/lesson', label: 'Interactive lesson', icon: Sparkles, description: 'AI builds a lesson with diagrams, code and questions' },
   { cmd: '/classrooms', label: 'My classrooms', icon: BookOpen, description: 'Open the classroom workspace' },
   { cmd: '/practice', label: 'Practice coding', icon: BookOpen, description: 'Monaco environment and tasks' },
   { cmd: '/assessments', label: 'Assessments', icon: BookOpen, description: 'Quizzes and tests' },
@@ -29,6 +30,7 @@ const COMMANDS = [
 ];
 
 const NAV_TARGETS = {
+  '/lesson': '/app/lesson',
   '/classrooms': '/app/classrooms',
   '/practice': '/app/practice',
   '/assessments': '/app/assessments',
@@ -208,7 +210,10 @@ export default function CommandChat() {
       say('Pick one of the options above, or type `/help` for commands.');
       return;
     }
-    say('I only take commands here. Try `/start` for a lesson, or `/help` to see everything I can open.');
+    // A learner who types a question in plain language is asking for a lesson.
+    // Refusing them ("I only take commands") was a dead end; the lesson studio
+    // answers the question itself.
+    navigate(`/app/lesson?prompt=${encodeURIComponent(text)}`);
   };
 
   return (

@@ -565,6 +565,97 @@ export const SCHEMAS = {
     ],
   },
 
+
+  ui_lessons: {
+    collection: 'ui_lessons',
+    description:
+      'Author-generated lesson documents for the Dynamic UI engine. Stored so a lesson can be re-rendered ' +
+      'after a refresh (or on another device) without a second model call, and so quiz/form questions can be ' +
+      're-validated server-side at submission time.',
+    fields: {
+      _id: 'ObjectId',
+      lessonId: 'string (the document response_id — stable, safe to expose)',
+      userId: 'ObjectId -> users (owner of the lesson)',
+      classroomId: 'ObjectId | null',
+      conceptId: 'ObjectId | null',
+      sessionId: 'ObjectId | null (tutor session this lesson belongs to)',
+      prompt: 'string — what the learner asked for',
+      mode: 'learn | teach | test | practise | continue',
+      level: 'beginner | developing | proficient | advanced',
+      subject: 'string — inferred teaching subject',
+      source: 'model | repaired | local | local-fallback | fallback',
+      provider: 'string | null',
+      model: 'string | null',
+      document: 'object — validated UI protocol document (see modules/ai/ui/protocol.js)',
+      dropped: '[{ path, message }] — components rejected during repair',
+      continuedBy: 'string | null — lessonId of the follow-up lesson',
+      createdAt: 'Date',
+    },
+    indexes: [
+      { keys: { userId: 1, createdAt: -1 } },
+      { keys: { userId: 1, lessonId: 1 }, options: { unique: true } },
+      { keys: { classroomId: 1, createdAt: -1 } },
+    ],
+  },
+
+  learning_progress: {
+    collection: 'learning_progress',
+    description:
+      'Per-student, per-lesson teaching state: which sections were completed, quiz attempts and form ' +
+      'submissions. Written by the renderer through /api/learning/progress and by quiz/form submissions.',
+    fields: {
+      _id: 'ObjectId',
+      userId: 'ObjectId',
+      classroomId: 'ObjectId | null',
+      lessonId: 'string',
+      title: 'string',
+      conceptId: 'ObjectId | null',
+      status: 'not_started | in_progress | completed (derived on read)',
+      totalComponents: 'number',
+      completedComponentIds: '[string]',
+      quizzes: '[{ componentId, score, max, correct, at }]',
+      forms: '[{ componentId, score, answered, at }]',
+      lastActiveAt: 'Date',
+    },
+    indexes: [
+      { keys: { userId: 1, classroomId: 1, lessonId: 1 }, options: { unique: true } },
+      { keys: { userId: 1, lastActiveAt: -1 } },
+    ],
+  },
+
+  ui_submissions: {
+    collection: 'ui_submissions',
+    description:
+      'Idempotency records for question-form and quiz submissions. A repeated request with identical ' +
+      'answers within the TTL returns the stored result instead of re-grading or re-calling the model.',
+    fields: {
+      _id: 'string (userId:lessonId:componentId:payloadHash)',
+      userId: 'ObjectId',
+      lessonId: 'string',
+      componentId: 'string',
+      createdAt: 'Date',
+      result: 'object',
+    },
+    indexes: [{ keys: { createdAt: 1 }, options: { expireAfterSeconds: 86400 } }],
+  },
+
+  code_runs: {
+    collection: 'code_runs',
+    description: 'Audit trail of sandbox executions requested from lesson code components.',
+    fields: {
+      _id: 'ObjectId',
+      userId: 'ObjectId',
+      lessonId: 'string | null',
+      componentId: 'string | null',
+      language: 'string',
+      executed: 'boolean',
+      passed: 'number',
+      total: 'number',
+      createdAt: 'Date',
+    },
+    indexes: [{ keys: { userId: 1, createdAt: -1 } }],
+  },
+
   audit_logs: {
     collection: 'audit_logs',
     description: 'Security-relevant actions: role changes, permission changes, privacy access, config edits.',

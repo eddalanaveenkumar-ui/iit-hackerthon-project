@@ -17,6 +17,7 @@ import practiceRoutes from './modules/practice/routes.js';
 import intelligenceRoutes from './modules/intelligence/routes.js';
 import aiRoutes from './modules/ai/routes.js';
 import dashboardRoutes from './modules/dashboards/routes.js';
+import dynamicUiRoutes from './modules/learning/routes.js';
 
 export function createApp() {
   const app = express();
@@ -68,6 +69,9 @@ export function createApp() {
   app.use('/api/syllabus', syllabusRoutes);
   app.use('/api/tutor', tutorRoutes);
   app.use('/api/learning', assessmentRoutes);
+  // Dynamic UI engine: AI-authored lessons, question forms, quiz grading,
+  // sandboxed code execution and learning progress.
+  app.use('/api', dynamicUiRoutes);
   app.use('/api/practice', practiceRoutes);
   app.use('/api/intelligence', intelligenceRoutes);
   app.use('/api/dashboard', dashboardRoutes);

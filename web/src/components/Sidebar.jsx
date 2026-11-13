@@ -4,6 +4,7 @@ import {
   ChevronDown,
   GraduationCap,
   History,
+  Lightbulb,
   MessageSquare,
   Plus,
   Settings,
@@ -69,6 +70,7 @@ export function SidebarContent({ onNavigate, user }) {
       <nav className="flex-1 space-y-5 overflow-y-auto px-2.5 pb-4">
         <div className="space-y-0.5">
           <SideLink to="/app" end icon={MessageSquare} label="Chat" onNavigate={onNavigate} />
+          <SideLink to="/app/lesson" icon={Lightbulb} label="Interactive lesson" onNavigate={onNavigate} />
         </div>
 
         <Group label="Learning profile">

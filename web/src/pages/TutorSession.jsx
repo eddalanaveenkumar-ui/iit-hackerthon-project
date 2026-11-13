@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -14,8 +14,11 @@ import {
   X,
   XCircle,
 } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
+import DynamicRenderer from '../components/DynamicRenderer/DynamicRenderer';
+import Markdown from '../components/Markdown';
 import { api } from '../lib/api';
+import { safeMessageText } from '../lib/messageText';
+import { createDynamicActions } from '../lib/dynamicUi';
 import { Badge, ErrorBanner, LoadingBlock, Spinner, cx, useToast } from '../components/ui';
 import { VisualBlocks, VisualHint } from '../components/visuals';
 import { categoryStyles, levelStyles, timeAgo } from '../lib/format';
@@ -317,6 +320,33 @@ function Row({ label, value }) {
   );
 }
 
+/**
+ * A tutor turn that answered with a UI document renders as a lesson inside the
+ * conversation. Interacting with it (a quiz, a question form, a code run) feeds
+ * the same evidence engines as a normal turn, because the actions are the same
+ * ones the lesson page uses.
+ */
+function InlineLesson({ document }) {
+  const navigate = useNavigate();
+  const toast = useToast();
+  const [progress, setProgress] = useState(null);
+  const actions = useMemo(
+    () =>
+      createDynamicActions({
+        navigate: (path) => navigate(path),
+        notify: (tone, msg) => toast?.[tone]?.(msg),
+        onProgress: setProgress,
+        title: document?.metadata?.topic,
+      }),
+    [document?.metadata?.topic, navigate, toast],
+  );
+  return (
+    <div className="mt-3 rounded-xl2 border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900 sm:p-4">
+      <DynamicRenderer document={document} actions={actions} progress={progress} showHeader={false} />
+    </div>
+  );
+}
+
 function MessageBubble({ message }) {
   const isUser = message.role === 'user';
   const [visualsOpen, setVisualsOpen] = useState(true);
@@ -324,7 +354,7 @@ function MessageBubble({ message }) {
     return (
       <div className="flex justify-end">
         <div className="max-w-[85%] rounded-2xl rounded-br-sm bg-brand-600 px-3.5 py-2.5 text-sm text-white">
-          <p className="whitespace-pre-wrap">{message.content}</p>
+          <p className="whitespace-pre-wrap">{safeMessageText(message.content)}</p>
         </div>
       </div>
     );
@@ -337,8 +367,9 @@ function MessageBubble({ message }) {
       </span>
       <div className="min-w-0 flex-1">
         <div className="prose-tutor max-w-none text-sm text-slate-700 dark:text-slate-200">
-          <ReactMarkdown>{message.content}</ReactMarkdown>
+          <Markdown text={safeMessageText(message.content)} />
         </div>
+        {meta.ui ? <InlineLesson document={meta.ui} /> : null}
         {meta.visuals?.length ? (
           <>
             <VisualHint count={meta.visuals.length} open={visualsOpen} onToggle={() => setVisualsOpen((v) => !v)} />

@@ -13,6 +13,7 @@ import { getOrCreateProfile, refreshProfileAggregates, applyMasteryEvidence, get
 import { analyseInteraction, getOpenGaps } from '../intelligence/gap-engine.js';
 import { retrieveContext, buildSyllabusContext } from './retrieval.js';
 import { normaliseVisuals, buildFallbackVisuals } from './visuals.js';
+import { normaliseTutorReply } from './reply.js';
 
 const router = Router();
 
@@ -257,10 +258,16 @@ router.post(
       classroomId: classroom._id,
     });
 
-    const openingCandidate = typeof opening === 'string' ? opening : opening?.reply;
-    const replyText = typeof openingCandidate === 'string' && openingCandidate.trim().length > 0
-      ? openingCandidate.trim()
-      : `Let's begin with ${concept.name}.`;
+    // Never display the model's raw payload. `normaliseTutorReply` extracts prose
+    // from a parsed object, parses a string that is secretly JSON, and turns a
+    // component document into a renderable lesson — see tutor/reply.js.
+    const normalisedOpening = normaliseTutorReply(opening, {
+      question: `Start learning ${concept.name}`,
+      concept,
+      level: profile.knowledgeLevel,
+      subject: subject?.name,
+    });
+    const replyText = normalisedOpening.reply || `Let's begin with ${concept.name}.`;
     const assistantMsg = {
       sessionId,
       userId: req.userId,
@@ -278,6 +285,7 @@ router.post(
         provider: aiMeta.provider,
         model: aiMeta.model,
         simulated: aiMeta.simulated,
+        ui: normalisedOpening.ui || undefined,
       },
       createdAt: new Date(),
     };
@@ -557,15 +565,21 @@ router.post(
       classroomId: session.classroomId,
     });
 
-    // A model can answer with an empty or whitespace-only `reply` — and did, in
-    // production: the deployed turn returned HTTP 200 with a zero-length message
-    // and the client rendered a blank bubble. `||` already covers "", so this
-    // also trims and rejects whitespace, and never ships an empty answer.
-    const FALLBACK_REPLY = 'Let me put that another way — which part feels unclear?';
-    const candidateReply = typeof tutorData === 'string' ? tutorData : tutorData?.reply;
-    const reply = typeof candidateReply === 'string' && candidateReply.trim().length > 0
-      ? candidateReply.trim()
-      : FALLBACK_REPLY;
+    // Two production failures met here.
+    //
+    // 1. An empty `reply` produced a blank bubble. 2. When the model's JSON failed
+    //    to parse, the orchestrator returned the raw text and this route displayed
+    //    it verbatim — the student saw `{ "reply": "Great! …", "scaffoldingLevel":
+    //    … }` in the chat. Both are fixed by normalising rather than trusting:
+    //    `normaliseTutorReply` only ever yields prose (or a rendered lesson plus
+    //    its prose), never a serialised payload.
+    const normalised = normaliseTutorReply(tutorData, {
+      question: data.content,
+      concept,
+      level: adaptiveLevel,
+      subject: subject?.name,
+    });
+    const reply = normalised.reply;
     const assessmentRecommendation = tutorData?.assessmentRecommendation?.recommend
       ? tutorData.assessmentRecommendation
       : shouldRecommendAssessment
@@ -612,6 +626,9 @@ router.post(
         model: aiMeta.model,
         simulated: aiMeta.simulated,
         sources: retrieved.chunks.slice(0, 3).map((c) => c.documentName),
+        // The rendered lesson, when the model answered with a UI document.
+        ui: normalised.ui || undefined,
+        replyRepaired: normalised.repaired || undefined,
       },
       createdAt: new Date(),
     };

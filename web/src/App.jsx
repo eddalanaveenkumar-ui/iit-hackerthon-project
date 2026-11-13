@@ -20,6 +20,7 @@ const ChatPrivacy = lazy(() => import('./pages/ChatPrivacy'));
 const Settings = lazy(() => import('./pages/Settings'));
 const HistoryPage = lazy(() => import('./pages/History'));
 const AIConfig = lazy(() => import('./pages/admin/AIConfig'));
+const Lesson = lazy(() => import('./pages/Lesson'));
 const NotFound = lazy(() => import('./pages/NotFound'));
 
 function FullPageSpinner() {
@@ -77,6 +78,8 @@ export default function App() {
           <Route path="classrooms/:classroomId/privacy" element={<ChatPrivacy />} />
 
           <Route path="tutor/:sessionId" element={<TutorSession />} />
+          <Route path="lesson" element={<Lesson />} />
+          <Route path="lesson/:lessonId" element={<Lesson />} />
           <Route path="history" element={<HistoryPage />} />
           <Route path="practice" element={<Practice />} />
           <Route path="practice/:classroomId" element={<Practice />} />

@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { AIProviderAdapter } from './base.js';
 import { estimateTokens } from './nvidia.js';
+import { buildLocalTutorial, localEvaluateAnswers } from '../ui/teaching-engine.js';
 
 /**
  * Deterministic on-device adapter.
@@ -15,6 +16,23 @@ import { estimateTokens } from './nvidia.js';
  * syllabus chunks, student evidence, code text) and emits the same JSON shapes
  * the remote models are asked for.
  */
+
+/** Bridge used by the local adapter for the two UI tasks. Kept tiny on purpose. */
+function buildLocalAuthoring(meta = {}) {
+  const { document } = buildLocalTutorial({
+    question: meta.question || meta.concept?.name || '',
+    concept: meta.concept || null,
+    level: meta.adaptiveLevel || meta.level || '',
+    subject: meta.subject || '',
+    responseId: meta.responseId,
+    compact: Boolean(meta.compact),
+  });
+  return document;
+}
+
+function buildLocalEvaluation(meta = {}) {
+  return localEvaluateAnswers({ questions: meta.questions || [], answers: meta.answers || [] });
+}
 
 const STOPWORDS = new Set(
   ('a an the and or but if then than that this these those is are was were be been being to of in on for with as by at from it its into about over under '
@@ -143,9 +161,30 @@ export class LocalProvider extends AIProviderAdapter {
         return this.#moderation(meta, promptText);
       case 'exercise_generation':
         return this.#exercise(meta);
+      case 'ui_authoring':
+        return this.#uiAuthoring(meta);
+      case 'ui_evaluation':
+        return this.#uiEvaluation(meta);
       default:
         return null;
     }
+  }
+
+  /**
+   * UI authoring without a model.
+   *
+   * Delegates to the real tutorial engine rather than emitting a fixed string,
+   * so a deployment with no API key still produces a genuine, validated lesson
+   * (objectives, worked example, practice, knowledge check). The engine is
+   * imported lazily to avoid a static cycle between the provider and the UI
+   * module that may call back into it.
+   */
+  #uiAuthoring(meta) {
+    return buildLocalAuthoring(meta);
+  }
+
+  #uiEvaluation(meta) {
+    return buildLocalEvaluation(meta);
   }
 
   #narrative(meta, promptText) {
