@@ -343,6 +343,21 @@ const dynamicQuestion = z.strictObject({
   step: z.number().finite().positive().optional(),
   language: z.enum(['javascript', 'python', 'java', 'sql']).optional(),
   accept: z.array(z.string().max(20)).max(6).optional(),
+  // A coding answer is executed, so the author declares the expected result.
+  // The client never evaluates it — verification belongs to the server.
+  expected_output: z.string().max(4000).optional(),
+  tests: z
+    .array(
+      z.strictObject({
+        id,
+        name: short,
+        args: z.array(z.union([z.string().max(2000), z.number().finite(), z.boolean()])).max(4).optional(),
+        expected: z.union([z.string().max(2000), z.number().finite()]).optional(),
+        hidden: optBool,
+      }),
+    )
+    .max(8)
+    .optional(),
 });
 
 const questionFormComponent = z.strictObject({

@@ -8,6 +8,7 @@ import { isFeatureEnabled } from '../ai/config-store.js';
 import { runJsonTask, runJsonTaskLocally } from '../ai/orchestrator.js';
 import { prompts } from '../ai/prompts.js';
 import { executeCode } from '../../utils/sandbox.js';
+import { gradeCodingAnswers, applyExecutionVerdicts } from './code-grading.js';
 import { localEvaluateAnswers, normaliseEvaluation } from '../ai/ui/teaching-engine.js';
 import { repairUiDocument, parseComponent } from '../ai/ui/protocol.js';
 import { generateLesson, loadLesson, lessonComponent, validateAnswers } from './lessons.js';
@@ -230,6 +231,12 @@ router.post(
 
     const accepted = validateAnswers({ questions, answers: data.answers });
 
+    // Code answers are *executed* before the model sees anything. The spec is
+    // explicit: a coding question must be verified by real sandboxed execution,
+    // never by an LLM's opinion of whether the code looks right. These results
+    // are given to the evaluator as evidence and then forced into its verdicts.
+    const executions = await gradeCodingAnswers({ questions, answers: accepted }).catch(() => []);
+
     const submit = async () => {
       // The AI receives the original questions, the complete answer set and the
       // learning context. Its evaluation is *advisory*: invalid output falls back
@@ -238,7 +245,7 @@ router.post(
         messages: prompts.uiEvaluation({
           questions,
           answers: accepted,
-          execution: [],
+          execution: executions,
           context: {
             concept: lesson.conceptId ? { id: lesson.conceptId, name: form.title || '' } : null,
             adaptiveLevel: lesson.level,
@@ -252,7 +259,10 @@ router.post(
       }).catch(() => ({ data: null, meta: { provider: 'local', model: 'local-analyser', simulated: true } }));
 
       const fallback = localEvaluateAnswers({ questions, answers: accepted });
-      const evaluation = normaliseEvaluation(raw, fallback);
+      const normalised = normaliseEvaluation(raw, fallback);
+      // Execution verdicts are authoritative and are applied last, so a model
+      // that contradicted the sandbox cannot overrule it.
+      const evaluation = applyExecutionVerdicts(normalised, executions);
 
       // A follow-up form is accepted only if it survives the same validation as
       // any other authored component; otherwise the student gets the text reply.
@@ -305,6 +315,15 @@ router.post(
           gaps: evaluation.gaps || [],
           next_step: evaluation.next_step || '',
           source: evaluation.source || 'local',
+          // Which answers were actually run, so the UI can label them honestly.
+          executions: executions.map((execution) => ({
+            question_id: execution.question_id,
+            executed: Boolean(execution.executed),
+            verified: execution.verdict === 'correct',
+            language: execution.language,
+            output: execution.output || '',
+            error: execution.error || '',
+          })),
         },
         follow_up_form: followUp,
         progress: null,

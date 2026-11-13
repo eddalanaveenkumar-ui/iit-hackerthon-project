@@ -44,6 +44,13 @@ export default function QuizRenderer({ component }) {
       const response = await actions.submitQuiz(component.id, payload);
       if (response?.ok === false) throw new Error(response.reason || 'The quiz could not be submitted.');
       setResult(response);
+      // A graded quiz is a completed section — the same evidence a form
+      // submission produces. Without this the lesson read as unfinished even
+      // after the student answered every question, and the progress bar never
+      // moved past the sections that happen to call markComplete.
+      if (response?.score !== undefined && component.id) {
+        actions.markComplete?.(component.id).catch?.(() => {});
+      }
     } catch (e) {
       setError(e.message || 'The quiz could not be submitted.');
     } finally {

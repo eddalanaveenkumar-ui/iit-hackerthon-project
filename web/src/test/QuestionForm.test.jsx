@@ -354,3 +354,64 @@ describe('accessibility', () => {
     expect(input.getAttribute('aria-describedby')).toContain(alert.id);
   });
 });
+
+describe('code answers are shown as executed, not judged', () => {
+  it('labels a verified answer and shows what it printed', async () => {
+    const user = userEvent.setup();
+    const submitAnswers = vi.fn().mockResolvedValue({
+      ok: true,
+      evaluation: {
+        score: 100,
+        overall: 'Both answers correct.',
+        per_question: [
+          {
+            question_id: 'q1',
+            verdict: 'correct',
+            executed: true,
+            verified: true,
+            language: 'python',
+            output: '10\n',
+            feedback: 'Executed in the sandbox and produced exactly the expected output.',
+          },
+        ],
+      },
+      executions: [{ question_id: 'q1', executed: true, verified: true, language: 'python', output: '10\n' }],
+    });
+    renderForm([{ id: 'q1', type: 'code_input', question: 'Print total(4)', language: 'python', required: true }], { submitAnswers });
+
+    await user.type(await screen.findByLabelText(/print total\(4\)/i), 'print(10)');
+    await user.click(screen.getByRole('button', { name: /submit answers/i }));
+
+    expect(await screen.findByText(/verified by execution/i)).toBeInTheDocument();
+    expect(screen.getByText('10')).toBeInTheDocument();
+    expect(screen.getByText(/python/)).toBeInTheDocument();
+  });
+
+  it('does not claim verification when the answer only ran', async () => {
+    const user = userEvent.setup();
+    const submitAnswers = vi.fn().mockResolvedValue({
+      ok: true,
+      evaluation: {
+        score: 0,
+        overall: 'Recorded.',
+        per_question: [
+          {
+            question_id: 'q1',
+            verdict: 'partly_correct',
+            executed: true,
+            verified: false,
+            language: 'python',
+            feedback: 'Executed in the sandbox without error. This confirms the code runs; it was not checked against an expected result.',
+          },
+        ],
+      },
+    });
+    renderForm([{ id: 'q1', type: 'code_input', question: 'Write something', required: true }], { submitAnswers });
+
+    await user.type(await screen.findByLabelText(/write something/i), 'x = 1');
+    await user.click(screen.getByRole('button', { name: /submit answers/i }));
+
+    expect(await screen.findByText(/executed — not verified/i)).toBeInTheDocument();
+    expect(screen.queryByText(/verified by execution/i)).not.toBeInTheDocument();
+  });
+});

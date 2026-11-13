@@ -5,6 +5,7 @@ import {
   Lightbulb,
   Send,
   Sparkles,
+  Terminal,
   XCircle,
 } from 'lucide-react';
 import { useDynamicActions, useSafeToast } from '../DynamicContext';
@@ -414,6 +415,22 @@ function EvaluationResult({ result, onFollowUp }) {
                   <IconComponent className="h-3.5 w-3.5" aria-hidden />
                   {style.label} · {entry.question_id}
                 </p>
+                {/* Code answers are executed, not judged. Say which ones were
+                    actually run so a score is never taken on trust. */}
+                {entry.executed ? (
+                  <p className="mt-1 flex flex-wrap items-center gap-1 text-[10.5px] font-medium">
+                    <span className={cx('badge gap-1', entry.verified ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300' : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300')}>
+                      <Terminal className="h-2.5 w-2.5" aria-hidden />
+                      {entry.verified ? 'verified by execution' : 'executed — not verified'}
+                    </span>
+                    {entry.language ? <span className="text-slate-400">{entry.language}</span> : null}
+                  </p>
+                ) : null}
+                {entry.output ? (
+                  <pre className="mt-1 overflow-x-auto rounded bg-slate-900 px-2 py-1.5 font-mono text-[11px] leading-relaxed text-slate-100">
+                    {String(entry.output).slice(0, 600)}
+                  </pre>
+                ) : null}
                 {entry.feedback ? <p className="mt-0.5 text-xs text-slate-600 dark:text-slate-300">{entry.feedback}</p> : null}
                 {entry.hint ? (
                   <p className="mt-1 flex items-start gap-1 text-[11px] text-brand-700 dark:text-brand-300">
