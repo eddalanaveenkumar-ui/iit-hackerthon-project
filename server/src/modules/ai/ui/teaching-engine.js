@@ -250,7 +250,18 @@ const TEMPLATES = [
       questions: [
         { id: 'q1', type: 'radio', question: 'What happens if a recursive function has no base case?', options: ['It returns None', 'It recurses until Python raises RecursionError', 'It silently stops at 100 calls', 'Python refuses to define it'], required: true },
         { id: 'q2', type: 'textarea', question: 'Why does the base case run before the multiplication in factorial(4)?', required: true, placeholder: 'Explain what the stack has to do first…' },
-        { id: 'q3', type: 'code_input', language: 'python', question: 'Write the base case line for total(n) where n == 0.', required: true },
+        // A code answer is executed, so the question must have an observable
+        // result. An open-ended "write the base case line" cannot be verified —
+        // it would be graded as "ran without error" and nothing more.
+        {
+          id: 'q3',
+          type: 'code_input',
+          language: 'python',
+          question: 'Write a complete function total(n) that returns the sum 1 + 2 + … + n using recursion, then print total(4).',
+          placeholder: 'def total(n):\n    ...',
+          expected_output: '10',
+          required: true,
+        },
       ],
       quiz: [
         { id: 'z1', question: 'Which line must come first in a recursive function?', options: ['The recursive call', 'A print statement', 'The base case'], correct_index: 2, explanation: 'The base case terminates the recursion; without reaching it first, the calls never stop.' },
@@ -309,7 +320,15 @@ const TEMPLATES = [
       questions: [
         { id: 'q1', type: 'radio', question: 'How many times does `for i in range(4)` run?', options: ['3', '4', '5', 'Depends on the body'], required: true },
         { id: 'q2', type: 'textarea', question: 'When would you choose while over for?', required: true },
-        { id: 'q3', type: 'code_input', language: 'python', question: 'Write a loop that prints 0, 1, 2.', required: true },
+        {
+          id: 'q3',
+          type: 'code_input',
+          language: 'python',
+          question: 'Write a for loop that prints 0, 1 and 2 on separate lines.',
+          placeholder: 'for ...:',
+          expected_output: '0\n1\n2',
+          required: true,
+        },
       ],
       quiz: [
         { id: 'z1', question: 'What does range(1, 5) produce?', options: ['1, 2, 3, 4, 5', '1, 2, 3, 4', '0, 1, 2, 3, 4'], correct_index: 1, explanation: 'range stops before its second argument.' },

@@ -646,6 +646,22 @@ const dynamicQuestion = z.strictObject({
   step: z.number().finite().positive().optional(),
   language: z.enum(['javascript', 'python', 'java', 'sql']).optional(),
   accept: z.array(z.string().max(20)).max(6).optional(),
+  // A coding question is graded by *running* the answer, so the author declares
+  // what correct looks like. Without one of these the answer is executed and
+  // reported as "runs without error" — never silently marked correct.
+  expected_output: z.string().max(4000).optional(),
+  tests: z
+    .array(
+      z.strictObject({
+        id,
+        name: short,
+        args: z.array(z.union([z.string().max(2000), z.number().finite(), z.boolean()])).max(4).optional(),
+        expected: z.union([z.string().max(2000), z.number().finite()]).optional(),
+        hidden: optBool,
+      }),
+    )
+    .max(8)
+    .optional(),
 });
 
 const questionFormComponent = z.strictObject({

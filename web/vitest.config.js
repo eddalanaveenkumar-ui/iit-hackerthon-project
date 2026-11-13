@@ -13,6 +13,9 @@ export default defineConfig({
     include: ['src/**/*.test.{js,jsx}'],
     css: false,
     restoreMocks: true,
+    // Renderers are code-split; a cold jsdom + chunk load can exceed the 1s
+    // default under parallel load, which made the acceptance suite flaky.
+    testTimeout: 15000,
     // The renderer lazy-loads Monaco/KaTeX; those modules are mocked per-test
     // where they would otherwise pull a 4 MB editor into jsdom.
     server: { deps: { inline: ['zod'] } },

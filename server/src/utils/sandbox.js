@@ -26,6 +26,26 @@ const RUNNER_SOURCE = `import { createRequire } from 'node:module';
 const payload = JSON.parse(process.env.LM_PAYLOAD || '{}');
 const out = [];
 const emit = (v) => { const s = typeof v === 'string' ? v : JSON.stringify(v); out.push(s); };
+// "run" mode executes a whole program and reports what it printed, rather than
+// looking for a callable solve(). A question_form code answer is a snippet or a
+// script, not a function to test, so it needs this path.
+if (payload.mode === 'run') {
+  try {
+    const wrapped = new Function('console', 'module', 'exports', 'require', payload.code + '\\n;');
+    const moduleShim = { exports: {} };
+    const requireShim = () => { throw new Error('require() is disabled inside the sandbox'); };
+    wrapped(safeConsoleForRun(), moduleShim, moduleShim.exports, requireShim);
+    process.stdout.write('@@RESULT@@' + JSON.stringify({ results: [], loadError: null, logs: out.slice(-200) }));
+  } catch (err) {
+    process.stdout.write('@@RESULT@@' + JSON.stringify({ results: [], loadError: String(err && err.message ? err.message : err), logs: out.slice(-200) }));
+  }
+} else {
+  runSolveMode();
+}
+function safeConsoleForRun() {
+  return { log: (...a) => emit(a.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ')), error: (...a) => emit(a.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ')), warn: (...a) => emit(a.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ')) };
+}
+function runSolveMode() {
 const safeConsole = {
   log: (...a) => emit(a.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ')),
   error: (...a) => emit(a.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ')),
@@ -57,21 +77,40 @@ if (!loadError && typeof userFn === 'function') {
   loadError = 'No callable solve() function was found in your submission.';
 }
 process.stdout.write('@@RESULT@@' + JSON.stringify({ results, loadError, logs: out.slice(-100) }));
+}
 `;
 
 function pickRunnerPath() {
   return path.join(os.tmpdir(), 'learnmate-sandbox-runner.mjs');
 }
 
+/**
+ * Materialise the JavaScript runner in a temp file, read-only so the sandboxed
+ * child can read it but not rewrite it.
+ *
+ * The runner is cached at a fixed path and written `0o444`, so a plain
+ * `writeFile` over an existing runner throws EACCES the first time the runner's
+ * source changes — after a deploy, that turned every JavaScript execution into
+ * "permission denied" until someone deleted a file in /tmp. The stale copy is
+ * removed first, and losing a write race is tolerated because the content is
+ * identical.
+ */
 async function ensureRunner() {
   const runner = pickRunnerPath();
   try {
     const existing = await fs.readFile(runner, 'utf8');
     if (existing === RUNNER_SOURCE) return runner;
+    await fs.rm(runner, { force: true }); // a different version is cached
   } catch {
-    /* write below */
+    /* no cached runner — write below */
   }
-  await fs.writeFile(runner, RUNNER_SOURCE, { mode: 0o444 });
+  try {
+    await fs.writeFile(runner, RUNNER_SOURCE, { mode: 0o444 });
+  } catch (error) {
+    if (error?.code !== 'EACCES' && error?.code !== 'EEXIST') throw error;
+    const written = await fs.readFile(runner, 'utf8').catch(() => null);
+    if (written !== RUNNER_SOURCE) throw error;
+  }
   return runner;
 }
 
@@ -171,7 +210,10 @@ export function staticCheck(code, language = 'javascript') {
  * Executes a submission against tests.
  * @returns {Promise<{ executed: boolean, runtime: string, results: [], stdout: string, loadError: string|null, timedOut: boolean }>}
  */
-export async function executeCode({ code, language = 'javascript', tests = [] }) {
+export async function executeCode({ code, language = 'javascript', tests = [], mode = 'tests' }) {
+  // mode: 'tests' runs `solve(args)` against test cases (practice workspace).
+  // mode: 'run' executes the program as written and reports its output — what a
+  // question_form code answer needs, because the student wrote a script.
   const staticInfo = staticCheck(code, language);
   if (language !== 'javascript' && language !== 'python') {
     return {
@@ -190,7 +232,7 @@ export async function executeCode({ code, language = 'javascript', tests = [] })
   try {
     if (language === 'javascript') {
       const runner = await ensureRunner();
-      const payload = { code, tests };
+      const payload = { code, tests, mode };
       if (payload.code.length > 60_000) {
         return { executed: false, runtime: 'javascript', reason: 'Submission too large (limit 60 KB).', results: [], stdout: '', loadError: null, timedOut: false, staticAnalysis: staticInfo };
       }
@@ -251,6 +293,33 @@ export async function executeCode({ code, language = 'javascript', tests = [] })
 
     // Python: isolated interpreter (-I -S), empty env, resource-limited, timeout.
     const file = path.join(workDir, 'submission.py');
+    if (mode === 'run') {
+      // Execute the script as written and capture what it prints. The harness
+      // only appends a result marker so the caller can tell the program finished.
+      // The marker proves the program reached the end. `import json` goes first
+      // so a script that prints a line identical to the marker cannot confuse the
+      // split, and the program's own output is everything before it.
+      const runHarness = `import json\n${code}\n\nprint('@@RESULT@@' + json.dumps({'results': [], 'loadError': None}))\n`;
+      await fs.writeFile(file, runHarness, 'utf8');
+      const runRes = await runProcess('python3', ['-I', '-S', file], { cwd: workDir, env: {}, timeoutMs: TIME_LIMIT_MS });
+      if (runRes.timedOut) {
+        return { executed: true, runtime: 'python3 (isolated)', results: [], stdout: '', loadError: null, timedOut: true, staticAnalysis: staticInfo };
+      }
+      const runMarker = runRes.stdout.indexOf('@@RESULT@@');
+      const programOut = runMarker === -1 ? runRes.stdout : runRes.stdout.slice(0, runMarker);
+      return {
+        executed: true,
+        runtime: 'python3 (isolated)',
+        results: [],
+        stdout: programOut.slice(0, MAX_OUTPUT),
+        // A non-zero exit or stderr on a program that printed no marker is an error.
+        loadError: runMarker === -1
+          ? (runRes.stderr || runRes.stdout || 'Python produced no result').slice(0, 1500)
+          : null,
+        timedOut: false,
+        staticAnalysis: staticInfo,
+      };
+    }
     const harness = `import json, sys, io, contextlib\n${code}\n\nTESTS = json.loads(sys.argv[1])\nout = []\nfor t in TESTS:\n    args = [__import__('json').loads(a) if isinstance(a, str) else a for a in t.get('args', [])]\n    try:\n        val = solve(*args)\n        out.append({'id': t['id'], 'passed': True, 'output': json.dumps(val)})\n    except Exception as e:\n        out.append({'id': t['id'], 'passed': False, 'output': '', 'error': f'{type(e).__name__}: {e}'})\nprint('@@RESULT@@' + json.dumps({'results': out}))\n`;
     await fs.writeFile(file, harness, 'utf8');
     const res = await runProcess('python3', ['-I', '-S', file, JSON.stringify(tests)], {

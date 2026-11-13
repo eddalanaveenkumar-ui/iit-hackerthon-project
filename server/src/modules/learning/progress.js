@@ -58,12 +58,21 @@ export async function getOrCreateProgress({ userId, classroomId = null, lessonId
   return db.collection('learning_progress').findOne(filter);
 }
 
-/** Recompute completion from the union of every completion signal we record. */
+/**
+ * Recompute completion from the union of every completion signal we record.
+ *
+ * `completedComponentIds` stores the bare component id, and `gradeQuiz` /
+ * `recordFormSubmission` also `$addToSet` it. This function used to add a
+ * *prefixed* copy (`quiz:<id>`, `form:<id>`) on top, so one quiz submission
+ * counted as two completed sections — a nine-section lesson read 44% after a
+ * form and a quiz (2 + 2 of 9) instead of 22% (2 of 9). The distinction that
+ * matters is the component id alone: every signal names the same component.
+ */
 function deriveStatus(doc) {
   if (!doc) return 'not_started';
   const done = new Set(doc.completedComponentIds || []);
-  for (const quiz of doc.quizzes || []) done.add(`quiz:${quiz.componentId}`);
-  for (const form of doc.forms || []) done.add(`form:${form.componentId}`);
+  for (const quiz of doc.quizzes || []) done.add(String(quiz.componentId));
+  for (const form of doc.forms || []) done.add(String(form.componentId));
   const total = Math.max(Number(doc.totalComponents) || 0, done.size);
   const percent = total ? Math.min(100, Math.round((done.size / total) * 100)) : 0;
   return {

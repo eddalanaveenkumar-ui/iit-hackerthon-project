@@ -252,10 +252,17 @@ COMPONENT SHAPES (required fields only shown)
                    "questions": [{ "id": "q1", "type": "text_input|textarea|radio|checkbox_group|select|number|slider|date|code_input|boolean|file_upload",
                                    "question": "...", "description": "...", "placeholder": "...", "required": true,
                                    "options": ["A", "B"], "hint": "...",
-                                   "min": 1, "max": 5, "step": 1, "language": "python" }],
+                                   "min": 1, "max": 5, "step": 1, "language": "python",
+                                   "expected_output": "6" }],
                    "submission": { "button_text": "Submit answers for evaluation", "action": "submit_ai_questions", "evaluation": "ai_evaluation" } }
    -> Use ONE question_form with MANY questions. The student gets ONE submit button at the end.
       Never emit several forms in a row to ask several things.
+   -> A code_input answer IS EXECUTED in a sandbox. Always give it a "language" of python
+      or javascript, and always give it "expected_output" — the exact stdout that a correct
+      answer prints. Without it the answer is only checked for running, never for being
+      right, and the student is told their code was not verified. Write the question so the
+      expected output is unambiguous ("Print the value of factorial(3)"), not open-ended.
+      Java and SQL are not executed in this deployment, so do not use them for code_input.
 - progress: { "items": [{ "label": "Loops", "value": 60, "detail": "2 of 3 done" }] }
 - timeline: { "events": [{ "label": "1969", "detail": "ARPANET", "date": "1969" }] }
 - actions: { "actions": [{ "id": "a1", "label": "Practise", "action": "open_practice", "target": "/app/practice", "tone": "brand" }] }

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { ArrowUp, BookOpen, Check, ChevronLeft, Plus, Sparkles, X } from 'lucide-react';
 import { api } from '../lib/api';
 import { cx, Spinner } from '../components/ui';
+import ResumeCard from '../components/ResumeCard';
 
 /**
  * The landing surface of the app: a chat.
@@ -228,7 +229,10 @@ export default function CommandChat() {
             Type a command. <code className="rounded bg-slate-100 px-1 py-0.5 text-[13px] dark:bg-slate-800">/start</code> begins a
             guided session in one of your classrooms.
           </p>
-          <div className="mt-6 grid w-full max-w-lg gap-2 sm:grid-cols-2">
+          {/* The way back into an unfinished lesson. Renders nothing when there
+              is none, so the landing page is unchanged for a new learner. */}
+          <ResumeCard className="mt-6 w-full max-w-lg" />
+          <div className="mt-2 grid w-full max-w-lg gap-2 sm:grid-cols-2">
             {COMMANDS.slice(0, 4).map((c) => (
               <button
                 key={c.cmd}

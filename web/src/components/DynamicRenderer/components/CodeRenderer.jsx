@@ -176,10 +176,13 @@ export default function CodeRenderer({ component }) {
 
             {total ? (
               <ul className="space-y-1">
-                {outcome.results.map((test) => {
+                {outcome.results.map((test, index) => {
                   const definition = (component.tests || []).find((t) => t.id === test.id);
+                  // The sandbox echoes an id per test, but a run with no declared
+                  // tests returns results without one — fall back to the index so
+                  // the list never renders two children with an undefined key.
                   return (
-                    <li key={test.id} className="flex items-start gap-1.5 text-xs">
+                    <li key={test.id ?? `result-${index}`} className="flex items-start gap-1.5 text-xs">
                       {test.passed ? (
                         <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600" aria-label="passed" />
                       ) : (

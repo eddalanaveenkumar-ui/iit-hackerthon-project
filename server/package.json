@@ -11,7 +11,10 @@
     "test:e2e": "node tests/run-e2e.mjs",
     "test:migration": "node tests/migration.mjs",
     "test:smoke": "node tests/smoke-web.mjs",
-    "test:bundle": "node tests/bundle.mjs"
+    "test:bundle": "node tests/bundle.mjs",
+    "test:code-grading": "node tests/code-grading.mjs",
+    "test:local-templates": "node tests/local-templates.mjs",
+    "test:progress": "node tests/progress-counting.mjs"
   },
   "dependencies": {
     "@lossless.org/nosqldb": "^11.0.0",
