@@ -14,7 +14,9 @@
     "test:bundle": "node tests/bundle.mjs",
     "test:code-grading": "node tests/code-grading.mjs",
     "test:local-templates": "node tests/local-templates.mjs",
-    "test:progress": "node tests/progress-counting.mjs"
+    "test:progress": "node tests/progress-counting.mjs",
+    "test:tracs": "node tests/tracs.mjs",
+    "test:tracs-live": "node tests/run-tracs-live.mjs"
   },
   "dependencies": {
     "@lossless.org/nosqldb": "^11.0.0",

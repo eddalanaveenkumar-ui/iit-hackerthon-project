@@ -2,6 +2,7 @@ import { ArrowRight, BookOpen, ClipboardCheck, Code2, Compass } from 'lucide-rea
 import { useDynamicActions } from '../DynamicContext';
 import { sanitizeNavTarget } from '../utils/validateUI';
 import { Empty, Panel } from './shared';
+import NavigationGroups from './NavigationGroups';
 import { cx } from '../../ui';
 
 /**
@@ -23,6 +24,12 @@ const ACTION_ICON = {
 
 export default function NavigationRenderer({ component }) {
   const { actions } = useDynamicActions();
+
+  // The presentation shape (`components: [carousel | popover]`) is not
+  // wayfinding — it cannot act — so it takes a separate path.
+  if (Array.isArray(component.components) && component.components.length) {
+    return <NavigationGroups component={component} />;
+  }
 
   const run = (item) => {
     switch (item.action) {

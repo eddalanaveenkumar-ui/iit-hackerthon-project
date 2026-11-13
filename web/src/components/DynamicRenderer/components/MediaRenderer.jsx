@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ImageOff, Pause, Play } from 'lucide-react';
 import { sanitizeUrl } from '../utils/validateUI';
 import { Empty, Notice, Panel, WIDTH_CLASS } from './shared';
+import { MediaGroup } from './CardGroupRenderer';
 
 /**
  * `media` — an image, video or audio block.
@@ -15,6 +16,18 @@ import { Empty, Notice, Panel, WIDTH_CLASS } from './shared';
  * audio when it loads is a bug, not a feature.
  */
 export default function MediaRenderer({ component }) {
+  // Two legal shapes: a single media (`media_kind` + `src`) or several items
+  // that each declare their own `media_type`. The group form is delegated so
+  // this file keeps one job per branch.
+  if (Array.isArray(component.items) && component.items.length) {
+    const width = WIDTH_CLASS[component.style?.width] || 'w-full';
+    return (
+      <Panel title={component.title} className={width}>
+        <MediaGroup items={component.items} />
+      </Panel>
+    );
+  }
+
   const src = sanitizeUrl(component.src);
   const poster = component.poster ? sanitizeUrl(component.poster) : '';
   const [failed, setFailed] = useState(false);

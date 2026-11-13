@@ -80,10 +80,12 @@ describe('acceptance: "Teach me recursion in Python"', () => {
     expect(screen.getByDisplayValue(/def factorial\(n\)/)).toBeInTheDocument();
     // step-by-step execution
     expect(screen.getByText(/call stack/i)).toBeInTheDocument();
-    // coding practice
-    expect(screen.getByText(/write sum_to recursively/i)).toBeInTheDocument();
+    // Coding practice and the quiz live in lazily-loaded renderers, so under a
+    // full parallel run their chunk may still be resolving. Awaiting is the
+    // correct assertion here — `getByText` would race the chunk, not the app.
+    expect(await screen.findByText(/write sum_to recursively/i)).toBeInTheDocument();
     // quiz
-    expect(screen.getByText(/what stops the recursion\?/i)).toBeInTheDocument();
+    expect(await screen.findByText(/what stops the recursion\?/i)).toBeInTheDocument();
     // summary
     expect(screen.getByText(/identify the base case first/i)).toBeInTheDocument();
     // and the document's own objectives

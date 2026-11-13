@@ -1,0 +1,209 @@
+{
+  "testQuestion": {
+    "version": "1.0",
+    "response_id": "tracs_tc44r9i2",
+    "response_type": "question_form",
+    "metadata": {
+      "topic": "Cs 201"
+    },
+    "components": [
+      {
+        "id": "say_mt879u6i",
+        "type": "text",
+        "format": "markdown",
+        "content": "Starting with **Cs 201**. One question at a time."
+      },
+      {
+        "id": "form_6af6f2896ebe7978b9977688_qmwevyc1g",
+        "title": "Cs 201 — question 1 of 4",
+        "type": "question_form",
+        "description": "What is the main idea of \"Cs 201\"?",
+        "questions": [
+          {
+            "id": "qmwevyc1g",
+            "type": "radio",
+            "question": "What is the main idea of \"Cs 201\"?",
+            "required": true,
+            "options": [
+              "The core definition of Cs 201",
+              "It is unrelated to the rest of the syllabus",
+              "It only applies to advanced students",
+              "It has no practical use"
+            ],
+            "hint": "Look back at what the syllabus said under this heading."
+          }
+        ],
+        "submission": {
+          "button_text": "Submit answer",
+          "action": "submit_ai_questions",
+          "evaluation": "ai_evaluation"
+        }
+      }
+    ]
+  },
+  "testVerdict": {
+    "version": "1.0",
+    "response_id": "tracs_b5xwvt7j",
+    "response_type": "assessment",
+    "metadata": {
+      "topic": "Cs 201"
+    },
+    "components": [
+      {
+        "id": "verdict_5d25v87n",
+        "style": {
+          "tone": "danger"
+        },
+        "type": "text",
+        "content": "**Not quite.** Not quite. The answer is: The core definition of Cs 201"
+      },
+      {
+        "id": "topic_progress_rhv1y9mj",
+        "title": "Where this topic stands",
+        "type": "progress",
+        "items": [
+          {
+            "id": "correct",
+            "label": "Correct answers",
+            "value": 0,
+            "detail": "0 of 1"
+          },
+          {
+            "id": "mastery",
+            "label": "Mastery",
+            "value": 0,
+            "detail": "Not started"
+          }
+        ]
+      },
+      {
+        "id": "say_upsrmll4",
+        "style": {
+          "tone": "neutral"
+        },
+        "type": "text",
+        "format": "markdown",
+        "content": "Next question:"
+      },
+      {
+        "id": "form_6af6f2896ebe7978b9977688_qmwevycam",
+        "title": "Cs 201 — question 2 of 4",
+        "type": "question_form",
+        "description": "Which statement about \"Cs 201\" is correct?",
+        "questions": [
+          {
+            "id": "qmwevycam",
+            "type": "radio",
+            "question": "Which statement about \"Cs 201\" is correct?",
+            "required": true,
+            "options": [
+              "The core definition of Cs 201",
+              "It is unrelated to the rest of the syllabus",
+              "It only applies to advanced students",
+              "It has no practical use"
+            ],
+            "hint": "Look back at what the syllabus said under this heading."
+          }
+        ],
+        "submission": {
+          "button_text": "Submit answer",
+          "action": "submit_ai_questions",
+          "evaluation": "ai_evaluation"
+        }
+      },
+      {
+        "id": "commands_bgpbilq9",
+        "type": "actions",
+        "actions": [
+          {
+            "id": "go_test",
+            "label": "Next question (/test)",
+            "action": "continue_lesson",
+            "tone": "brand"
+          },
+          {
+            "id": "go_learn",
+            "label": "Explain it (/learn)",
+            "action": "continue_lesson",
+            "tone": "neutral"
+          }
+        ]
+      }
+    ]
+  },
+  "learn": {
+    "version": "1.0",
+    "response_id": "tracs_de1qi3f5",
+    "response_type": "educational_tutorial",
+    "metadata": {},
+    "components": [
+      {
+        "id": "overview",
+        "title": "Let’s work through this",
+        "type": "learning",
+        "objectives": [
+          "Understand the idea well enough to use it."
+        ]
+      },
+      {
+        "id": "explain",
+        "type": "text",
+        "format": "markdown",
+        "content": "**This topic** — here is the working definition to build on.\n\nWork in three passes:\n\n1. **Name it** — say what it is in one sentence, without jargon.\n2. **Use it** — apply it to the smallest possible example.\n3. **Break it** — find an input where a naive understanding fails.\n\nThat third pass is where understanding actually forms: a definition you cannot break is a definition you have not tested."
+      },
+      {
+        "id": "next",
+        "title": "Where next",
+        "type": "actions",
+        "actions": [
+          {
+            "id": "a1",
+            "label": "Ask a follow-up question",
+            "action": "continue_lesson",
+            "tone": "neutral"
+          },
+          {
+            "id": "a2",
+            "label": "Practise in the workspace",
+            "action": "open_practice",
+            "tone": "brand",
+            "target": "/app/practice"
+          },
+          {
+            "id": "a3",
+            "label": "Take a graded assessment",
+            "action": "start_assessment",
+            "tone": "neutral",
+            "target": "/app/assessments"
+          }
+        ]
+      },
+      {
+        "id": "say_xm9hyvk4",
+        "type": "text",
+        "format": "markdown",
+        "content": "Before we move on — two quick checks that you actually followed that."
+      },
+      {
+        "id": "form_6af6f2896ebe7978b9977688_qmwevyd0o",
+        "title": "Cs 201 — question 1 of 2",
+        "type": "question_form",
+        "description": "In one or two sentences, explain \"Cs 201\".",
+        "questions": [
+          {
+            "id": "qmwevyd0o",
+            "type": "text_input",
+            "question": "In one or two sentences, explain \"Cs 201\".",
+            "placeholder": "Explain it in your own words…",
+            "required": true
+          }
+        ],
+        "submission": {
+          "button_text": "Submit answer",
+          "action": "submit_ai_questions",
+          "evaluation": "ai_evaluation"
+        }
+      }
+    ]
+  }
+}

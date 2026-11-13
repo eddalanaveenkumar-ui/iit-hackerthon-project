@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { cx } from '../../ui';
 import { Empty, Panel, WIDTH_CLASS } from './shared';
+import LayoutGroup, { isLayoutGroup } from './LayoutGroups';
 
 /**
  * `layout`, `tabs`, `accordion` — the structural components.
@@ -20,23 +21,49 @@ function Layout({ component, depth, renderChildren }) {
   const width = WIDTH_CLASS[component.style?.width] || 'w-full';
   const gap = GAP[component.gap] || GAP.md;
 
-  if (component.layout === 'grid' || component.layout === 'columns') {
+  // A layout may mix components with visual groups (`row`, `grid`, `box`). The
+  // groups are drawn here; the components still go through `renderChildren` so
+  // each keeps its own lazy loading and error boundary.
+  const groups = [];
+  const plain = [];
+  for (const child of children) {
+    if (isLayoutGroup(child)) groups.push(child);
+    else plain.push(child);
+  }
+  const renderGroup = (group, index) => (
+    <LayoutGroup key={group.id || `group-${index}`} item={group} depth={depth} renderChildren={renderChildren} />
+  );
+
+  // `direction` is honoured as an alias for the stack/split distinction: an
+  // author who writes `"direction": "vertical"` means a plain vertical stack.
+  const asStack = component.layout === 'vertical' || component.direction === 'vertical';
+
+  if (!asStack && (component.layout === 'grid' || component.layout === 'columns')) {
     const columns = component.columns || 2;
     const gridClass = columns >= 4 ? 'sm:grid-cols-2 lg:grid-cols-4' : columns === 3 ? 'sm:grid-cols-2 lg:grid-cols-3' : columns === 2 ? 'sm:grid-cols-2' : '';
     return (
-      <div className={cx('grid grid-cols-1', gridClass, gap, width)}>{renderChildren(children, depth + 1)}</div>
+      <div className={cx('grid grid-cols-1', gridClass, gap, width)}>
+        {renderChildren(plain, depth + 1)}
+        {groups.map(renderGroup)}
+      </div>
     );
   }
 
   if (component.layout === 'split') {
     return (
       <div className={cx('grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]', width)}>
-        {renderChildren(children, depth + 1)}
+        {renderChildren(plain, depth + 1)}
+        {groups.map(renderGroup)}
       </div>
     );
   }
 
-  return <div className={cx('space-y-3', width)}>{renderChildren(children, depth + 1)}</div>;
+  return (
+    <div className={cx('space-y-3', width)}>
+      {renderChildren(plain, depth + 1)}
+      {groups.map(renderGroup)}
+    </div>
+  );
 }
 
 function Tabs({ component, depth, renderChildren }) {

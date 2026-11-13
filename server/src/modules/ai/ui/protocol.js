@@ -55,6 +55,10 @@ export const UI_LIMITS = Object.freeze({
   maxTabsOrPanels: 8,
   maxCodeChars: 20_000,
   maxInlineImageBytes: 400_000,
+  // Visual groups: 4 across, 12 cells. Keeps a "grid" an arrangement rather
+  // than a bulk-layout escape hatch.
+  maxGridColumns: 4,
+  maxGridCells: 12,
 });
 
 /** Actions the UI is allowed to hand back to the application. */
@@ -76,9 +80,20 @@ export const UI_ACTIONS = Object.freeze([
 export const NAV_TARGETS = Object.freeze(['/app/practice', '/app/assessments', '/app/progress', '/app/classrooms', '/app']);
 
 /** Icons the renderer knows how to draw (lucide names resolved client-side). */
+/**
+ * Icon names the protocol allows. The first block is the original short
+ * vocabulary; the second adds the kebab-case lucide names the authoring
+ * sketches use (`book-open`, `play-circle`, …). Both resolve through one
+ * registry on the client, and an unknown name renders nothing rather than
+ * throwing.
+ */
 export const UI_ICONS = Object.freeze([
   'book', 'bulb', 'target', 'code', 'chart', 'sparkles', 'check', 'flag',
   'clock', 'layers', 'sigma', 'flask', 'brain', 'terminal', 'list', 'alert',
+  'book-open', 'book-open-check', 'play-circle', 'arrow-right', 'lightbulb',
+  'chevron-right', 'graduation-cap', 'puzzle', 'rocket', 'cpu', 'function-square',
+  'database', 'git-branch', 'repeat', 'shapes', 'pen-tool', 'trophy', 'bug',
+  'wrench', 'star', 'info', 'zap', 'eye', 'search',
 ]);
 
 export const QUESTION_TYPES = Object.freeze([
@@ -187,6 +202,9 @@ const options = z
 
 const children = () => z.array(z.lazy(() => componentSchema)).max(UI_LIMITS.maxComponents);
 
+/** A value shown inside a variable table: any scalar, printed as text. */
+const variableValue = z.union([z.string().max(300), z.number().finite(), z.boolean(), z.null()]);
+
 const base = {
   id,
   style: styleSchema,
@@ -204,13 +222,132 @@ const textComponent = z.strictObject({
   content: paragraph,
 });
 
+/**
+ * A layout may also contain *visual groups* rather than only components:
+ * a `row` of boxes and a `grid` of cells. These are the low-level presentation
+ * primitives a lesson reaches for when it wants columns side by side or a
+ * 3-across tile block — the shape authored UI sketches use. They are data, not
+ * markup and not code, so they are described here rather than treated as a
+ * raw escape hatch.
+ */
+const layoutItemSchema = z.lazy(() => z.union([
+  componentSchema,
+  z.strictObject({
+    type: z.literal('row'),
+    id: optId,
+    gap: z.enum(['sm', 'md', 'lg']).optional(),
+    children: z.array(layoutItemSchema).min(1).max(6),
+  }),
+  z.strictObject({
+    type: z.literal('grid'),
+    id: optId,
+    columns: z.number().int().min(1).max(4).optional(),
+    gap: z.enum(['sm', 'md', 'lg']).optional(),
+    children: z.array(layoutItemSchema).min(1).max(12),
+  }),
+  z.strictObject({ type: z.literal('box'), id: optId, content: short, tone: tone.optional() }),
+]));
+
+/**
+ * Give every layout cell a stable id, recursively, before the schema sees it.
+ *
+ * A bare cell — `{ "type": "text", "content": "A" }` inside a `grid` — is
+ * exactly what an author writes by hand, and rejecting it for missing an id
+ * would make the documented layout shape unusable. Both the strict parser and
+ * the repairing parser run this first, so the two paths agree.
+ */
+let layoutCellCounter = 0;
+function normaliseLayoutItems(items) {
+  return (Array.isArray(items) ? items : []).map((item) => {
+    if (!item || typeof item !== 'object') return item;
+    if (item.type === 'box') return item;
+    if (item.type === 'row' || item.type === 'grid') {
+      return { ...item, children: normaliseLayoutItems(item.children) };
+    }
+    if (!item.id) return { ...item, id: `cell-${(layoutCellCounter += 1).toString(36)}` };
+    return item;
+  });
+}
+
+/**
+ * Map the authoring sketches' field spellings onto the canonical ones.
+ *
+ * The sketches write `questions[].title` and `submit.label`; the protocol grew
+ * `questions[].question` and `submission.button_text`. Both are legitimate
+ * spellings of the same thing, so they are normalised once here rather than
+ * being duplicated through every consumer. Canonical always wins if both are
+ * present.
+ */
+function normaliseAliases(node) {
+  if (!node || typeof node !== 'object') return node;
+  if (Array.isArray(node)) return node.map(normaliseAliases);
+  const next = { ...node };
+
+  if (Array.isArray(next.questions)) {
+    next.questions = next.questions.map((q) => {
+      if (!q || typeof q !== 'object') return q;
+      const copy = { ...q };
+      if (!copy.question && copy.title) copy.question = copy.title;
+      return copy;
+    });
+  }
+
+  // question_form: `submit` → `submission`
+  if (next.type === 'question_form' && next.submit && !next.submission) {
+    next.submission = {
+      ...next.submit,
+      button_text: next.submit.button_text || next.submit.label,
+      action: next.submit.action || 'submit_ai_questions',
+    };
+    delete next.submit;
+  }
+  // form: `submit.action` defaults to the only safe handler
+  if (next.type === 'form' && next.submit && !next.submit.action) {
+    next.submit = { ...next.submit, action: 'submit_ai_questions' };
+  }
+
+  if (Array.isArray(next.children)) next.children = next.children.map(normaliseAliases);
+  if (Array.isArray(next.components)) next.components = next.components.map(normaliseAliases);
+  if (Array.isArray(next.tabs)) next.tabs = next.tabs.map((t) => (t && Array.isArray(t.children) ? { ...t, children: t.children.map(normaliseAliases) } : t));
+  if (Array.isArray(next.items) && next.type === 'accordion') {
+    next.items = next.items.map((i) => (i && Array.isArray(i.children) ? { ...i, children: i.children.map(normaliseAliases) } : i));
+  }
+  return next;
+}
+
+/** Apply the cell-id pass to every layout anywhere in a document. */
+function normaliseDocumentLayouts(raw) {
+  const visit = (node) => {
+    if (!node || typeof node !== 'object') return node;
+    if (Array.isArray(node)) return node.map(visit);
+    const next = { ...node };
+    // A layout's own cells are normalised wholesale (the pass recurses through
+    // rows and grids itself); every other container is descended into.
+    if (next.type === 'layout' && Array.isArray(next.children)) {
+      next.children = normaliseLayoutItems(next.children);
+    } else if (Array.isArray(next.children)) {
+      next.children = next.children.map(visit);
+    }
+    if (Array.isArray(next.components)) next.components = next.components.map(visit);
+    if (Array.isArray(next.tabs)) next.tabs = next.tabs.map((t) => (Array.isArray(t?.children) ? { ...t, children: t.children.map(visit) } : t));
+    if (Array.isArray(next.items) && next.type === 'accordion') {
+      next.items = next.items.map((i) => (Array.isArray(i?.children) ? { ...i, children: i.children.map(visit) } : i));
+    }
+    return next;
+  };
+  return normaliseAliases(visit(raw));
+}
+
 const layoutComponent = z.strictObject({
   ...base,
   type: z.literal('layout'),
-  layout: z.enum(['stack', 'grid', 'columns', 'split']),
+  // `layout` defaults: an author who writes `direction: "vertical"` (or nothing
+  // at all) should not be rejected for omitting a synonym.
+  layout: z.enum(['stack', 'grid', 'columns', 'split', 'vertical']).default('stack'),
+  direction: z.enum(['vertical', 'horizontal']).optional(),
   columns: z.number().int().min(1).max(4).optional(),
   gap: z.enum(['sm', 'md', 'lg']).optional(),
-  children: children(),
+  children: z.array(layoutItemSchema).min(1).max(UI_LIMITS.maxComponents),
 });
 
 const cardComponent = z.strictObject({
@@ -223,15 +360,67 @@ const cardComponent = z.strictObject({
   footer: optShort,
 });
 
-const mediaComponent = z.strictObject({
+/**
+ * `card_group` — a grid of comparable cards (a syllabus's modules, a set of
+ * resources). Distinct from `card` because the *collection* is the component:
+ * layout, column count and each card's icon/badge belong to the group. Items
+ * never carry children, so a group cannot nest arbitrarily.
+ */
+const cardGroupItem = z.strictObject({
+  id,
+  title: short,
+  icon: z.enum(UI_ICONS).optional(),
+  badge: optShort,
+  description: optShort,
+});
+
+const cardGroupComponent = z.strictObject({
   ...base,
-  type: z.literal('media'),
-  media_kind: z.enum(['image', 'video', 'audio']),
-  src: mediaUrl,
+  type: z.literal('card_group'),
+  layout: z.enum(['grid', 'list']).optional(),
+  columns: z.number().int().min(1).max(UI_LIMITS.maxGridColumns).optional(),
+  items: z.array(cardGroupItem).min(1).max(UI_LIMITS.maxItems),
+});
+
+/**
+ * One media item. `media_type` decides which of the other fields apply — an
+ * `icon` names a glyph, an `image` / `video` names an https source. Every URL
+ * still goes through `mediaUrl`, so the group shape is not a way to smuggle in
+ * a `javascript:` source.
+ */
+const mediaItem = z.strictObject({
+  id,
+  media_type: z.enum(['image', 'video', 'icon']),
+  src: mediaUrl.optional(),
   alt: optShort,
   caption: optShort,
   poster: mediaUrl.optional(),
+  controls: optBool,
+  aspect_ratio: z.enum(['16:9', '4:3', '1:1', '3:2', '9:16']).optional(),
+  name: z.enum(UI_ICONS).optional(),
+  title: optShort,
 });
+
+/**
+ * `media` — either the single-media shape (`media_kind` + `src`) that existing
+ * lessons use, *or* a group of items under `items`, each declaring its own
+ * `media_type`. Exactly one must be present: the single shape keeps existing
+ * lessons rendering, and the refine keeps "media with nothing to show" invalid.
+ */
+const mediaComponent = z
+  .strictObject({
+    ...base,
+    type: z.literal('media'),
+    media_kind: z.enum(['image', 'video', 'audio']).optional(),
+    src: mediaUrl.optional(),
+    alt: optShort,
+    caption: optShort,
+    poster: mediaUrl.optional(),
+    items: z.array(mediaItem).min(1).max(6).optional(),
+  })
+  .refine((m) => Boolean(m.items) !== Boolean(m.media_kind && m.src), {
+    message: 'media needs either items[] or media_kind + src, not both',
+  });
 
 const chartComponent = z.strictObject({
   ...base,
@@ -292,6 +481,46 @@ const formField = z.strictObject({
   accept: z.array(z.string().max(20)).max(6).optional(),
 });
 
+/**
+ * `data` — a chart and/or a table describing the same dataset. The chart uses
+ * the explicit `x_key` / `y_key` shape from the authoring sketch; the older
+ * `chart` component keeps its `labels` / `series` shape so existing lessons are
+ * untouched.
+ */
+const dataChartItem = z.strictObject({
+  id,
+  type: z.literal('chart'),
+  chart_type: z.enum(['bar', 'line', 'area', 'pie']),
+  title: optShort,
+  description: optShort,
+  x_key: z.string().regex(ID_RE),
+  y_key: z.string().regex(ID_RE),
+  data: z
+    .array(z.record(z.string().max(64), z.union([z.string().max(200), z.number().finite()])))
+    .min(1)
+    .max(UI_LIMITS.maxChartPoints),
+  x_label: optShort,
+  y_label: optShort,
+});
+
+const dataTableItem = z.strictObject({
+  id,
+  type: z.literal('table'),
+  title: optShort,
+  description: optShort,
+  columns: z.array(z.string().max(80)).min(1).max(UI_LIMITS.maxTableColumns),
+  rows: z
+    .array(z.array(z.union([z.string().max(500), z.number().finite(), z.boolean()])).max(UI_LIMITS.maxTableColumns))
+    .min(1)
+    .max(UI_LIMITS.maxTableRows),
+});
+
+const dataComponent = z.strictObject({
+  ...base,
+  type: z.literal('data'),
+  components: z.array(z.union([dataChartItem, dataTableItem])).min(1).max(2),
+});
+
 const formComponent = z.strictObject({
   ...base,
   type: z.literal('form'),
@@ -299,9 +528,13 @@ const formComponent = z.strictObject({
   fields: z.array(formField).min(1).max(UI_LIMITS.maxQuestions),
   submit: z
     .strictObject({
-      button_text: short,
-      action: z.enum(['save_progress', 'submit_ai_questions', 'navigate']),
+      // `button_text` is the original name; `label` is what the authoring
+      // sketches use. Both are accepted, exactly one is required.
+      button_text: optShort,
+      label: optShort,
+      action: z.enum(['save_progress', 'submit_ai_questions', 'navigate']).optional(),
     })
+    .refine((sub) => Boolean(sub.button_text || sub.label), { message: 'submit needs button_text or label' })
     .optional(),
 });
 
@@ -318,22 +551,62 @@ const inputComponent = z.strictObject({
   default_value: z.union([z.string().max(2000), z.number().finite(), z.boolean()]).optional(),
 });
 
-const navigationComponent = z.strictObject({
+/**
+ * `carousel` and `popover` — the two navigation *presentations* from the
+ * authoring sketch. They advance or open locally and cannot navigate, so the
+ * richer authoring shape does not widen what the model can drive.
+ */
+const carouselItem = z.strictObject({
+  id,
+  title: short,
+  lesson: optShort,
+  description: optShort,
+  icon: z.enum(UI_ICONS).optional(),
+});
+
+const carouselComponent = z.strictObject({
   ...base,
-  type: z.literal('navigation'),
-  orientation: z.enum(['horizontal', 'vertical']).optional(),
+  type: z.literal('carousel'),
+  items: z.array(carouselItem).min(1).max(UI_LIMITS.maxItems),
+});
+
+const popoverComponent = z.strictObject({
+  ...base,
+  type: z.literal('popover'),
+  trigger: short,
   items: z
-    .array(
-      z.strictObject({
-        id,
-        label: short,
-        action: z.enum(['navigate', 'continue_lesson', 'next_step', 'start_assessment', 'open_practice']),
-        target: z.enum(NAV_TARGETS).optional(),
-      }),
-    )
+    .array(z.strictObject({ id, label: short, description: optShort }))
     .min(1)
     .max(UI_LIMITS.maxItems),
 });
+
+/**
+ * `navigation` — either the wayfinding `items` shape
+ * (navigate / continue_lesson / …) or the presentation `components` shape
+ * (carousel / popover). Exactly one.
+ */
+const navigationComponent = z
+  .strictObject({
+    ...base,
+    type: z.literal('navigation'),
+    orientation: z.enum(['horizontal', 'vertical']).optional(),
+    items: z
+      .array(
+        z.strictObject({
+          id,
+          label: short,
+          action: z.enum(['navigate', 'continue_lesson', 'next_step', 'start_assessment', 'open_practice']),
+          target: z.enum(NAV_TARGETS).optional(),
+        }),
+      )
+      .min(1)
+      .max(UI_LIMITS.maxItems)
+      .optional(),
+    components: z.array(z.union([carouselComponent, popoverComponent])).min(1).max(2).optional(),
+  })
+  .refine((n) => Boolean(n.items) !== Boolean(n.components), {
+    message: 'navigation needs either items[] or components[], not both',
+  });
 
 const quizQuestion = z.strictObject({
   id,
@@ -573,7 +846,10 @@ const executionTableComponent = z.strictObject({
         step: z.number().int().min(1).max(999),
         line: z.number().int().min(1).max(999).optional(),
         statement: z.string().max(600),
-        variables: z.record(z.string().max(64), z.string().max(300)).optional(),
+        // Values are printed as text, so a scalar (number / boolean / null) is
+        // as safe as a string — and accepting it stops the very common
+        // `{"x": 5}` shape from being rejected as an invalid lesson.
+        variables: z.record(z.string().max(64), variableValue).optional(),
         output: z.string().max(600).optional(),
       }),
     )
@@ -615,7 +891,7 @@ const executionTraceComponent = z.strictObject({
     .array(
       z.strictObject({
         line: z.number().int().min(1).max(999),
-        variables: z.record(z.string().max(64), z.string().max(300)).optional(),
+        variables: z.record(z.string().max(64), variableValue).optional(),
         call_stack: z.array(z.string().max(200)).max(30).optional(),
         output: z.string().max(600).optional(),
         note: optShort,
@@ -631,7 +907,11 @@ const questionValidation = fieldValidation;
 const dynamicQuestion = z.strictObject({
   id,
   type: z.enum(QUESTION_TYPES),
-  question: short,
+  // `question` is the original name, `title` the authoring-sketch one. A
+  // normalisation pass copies `title` → `question` before parsing, so the rest
+  // of the pipeline only ever reads one field.
+  question: optShort,
+  title: optShort,
   description: optShort,
   placeholder: optShort,
   required: optBool,
@@ -669,10 +949,22 @@ const questionFormComponent = z.strictObject({
   type: z.literal('question_form'),
   description: optShort,
   questions: z.array(dynamicQuestion).min(1).max(UI_LIMITS.maxQuestions),
+  // `submission` is the original name, `submit` the sketch's. Normalised before
+  // parsing.
   submission: z
     .strictObject({
-      button_text: short,
-      action: z.literal('submit_ai_questions'),
+      button_text: optShort,
+      label: optShort,
+      action: z.literal('submit_ai_questions').optional(),
+      evaluation: z.enum(['ai_evaluation', 'local_evaluation']).optional(),
+    })
+    .refine((sub) => Boolean(sub.button_text || sub.label), { message: 'submission needs button_text or label' })
+    .optional(),
+  submit: z
+    .strictObject({
+      label: optShort,
+      button_text: optShort,
+      action: z.literal('submit_ai_questions').optional(),
       evaluation: z.enum(['ai_evaluation', 'local_evaluation']).optional(),
     })
     .optional(),
@@ -687,12 +979,16 @@ export const COMPONENT_SCHEMAS = Object.freeze({
   text: textComponent,
   layout: layoutComponent,
   card: cardComponent,
+  card_group: cardGroupComponent,
   media: mediaComponent,
   chart: chartComponent,
   table: tableComponent,
+  data: dataComponent,
   form: formComponent,
   input: inputComponent,
   navigation: navigationComponent,
+  carousel: carouselComponent,
+  popover: popoverComponent,
   quiz: quizComponent,
   learning: learningComponent,
   code_editor: codeEditorComponent,
@@ -760,11 +1056,26 @@ export const uiDocumentSchema = z.strictObject({
 /* structural checks: depth, count, ids, bytes                                 */
 /* -------------------------------------------------------------------------- */
 
-function walk(components, depth, visit) {
-  for (const component of components || []) {
-    visit(component, depth);
-    const get = CONTAINER_KEYS[component?.type];
-    if (get) walk(get(component) || [], depth + 1, visit);
+const PRESENTATION_TYPES = new Set(['row', 'grid', 'box']);
+
+/**
+ * Depth-first walk over components *and* presentation groups.
+ *
+ * A `layout` may hold `row` / `grid` groups rather than components, and those
+ * groups hold cells. Groups are not components — they have no id and should not
+ * count toward the component total — but the components inside them must still
+ * be visited, or their depth and their ids go unchecked.
+ */
+function walk(items, depth, visit) {
+  for (const item of items || []) {
+    if (!item || typeof item !== 'object') continue;
+    if (!PRESENTATION_TYPES.has(item.type)) visit(item, depth);
+    const get = CONTAINER_KEYS[item?.type];
+    if (get) walk(get(item) || [], PRESENTATION_TYPES.has(item.type) ? depth : depth + 1, visit);
+    // A group's cells live one level below the group itself.
+    if (PRESENTATION_TYPES.has(item.type) && Array.isArray(item.children)) {
+      walk(item.children, depth, visit);
+    }
   }
 }
 
@@ -817,7 +1128,7 @@ function flatten(error) {
  * Invalid input never throws — the caller decides between repair and fallback.
  */
 export function parseUiDocument(raw) {
-  const result = uiDocumentSchema.safeParse(raw);
+  const result = uiDocumentSchema.safeParse(normaliseDocumentLayouts(raw));
   if (!result.success) {
     return { ok: false, document: null, issues: flatten(result.error), stats: null };
   }
@@ -846,10 +1157,22 @@ export function repairUiDocument(raw, { minComponents = 1 } = {}) {
   if (!raw || typeof raw !== 'object') return null;
   const dropped = [];
 
+  /**
+   * Give every visual group cell a stable id and normalise its shape before the
+   * schema sees it. A bare cell — `{ "type": "text", "content": "A" }` inside a
+   * `grid` — is exactly what an author writes by hand, and rejecting it would
+   * make the documented layout shape unusable.
+   */
   const repairList = (list, depth) => {
     const out = [];
     for (const candidate of Array.isArray(list) ? list : []) {
-      const single = parseComponent(candidate);
+      // A layout's cells must be normalised (ids, group shapes) *before* the
+      // component parser runs, or a bare `{ type: "text", content: "A" }` cell is
+      // rejected for having no id and the whole layout is dropped.
+      const prepared = candidate && typeof candidate === 'object' && candidate.type === 'layout'
+        ? { ...candidate, children: normaliseLayoutItems(candidate.children) }
+        : candidate;
+      const single = parseComponent(prepared);
       if (!single.ok) {
         dropped.push({ path: `components.${candidate?.id || candidate?.type || '?'}`, message: single.issues[0]?.message || 'invalid component' });
         continue;
@@ -861,7 +1184,22 @@ export function repairUiDocument(raw, { minComponents = 1 } = {}) {
       // nesting stays bounded, and the renderer's recursion is capped.
       const flatten = Boolean(get) && depth >= UI_LIMITS.maxDepth;
       if (get) {
-        if (component.type === 'layout') component = { ...component, children: repairList(component.children, depth + 1) };
+        if (component.type === 'layout') {
+          // Groups (`row` / `grid` / `box`) are presentation, not components:
+          // they are normalised here and validated by the layout schema itself,
+          // which knows how to parse them. Anything that is a real component goes
+          // through the component repair.
+          const items = normaliseLayoutItems(component.children);
+          const repaired = [];
+          for (const item of items) {
+            if (item && typeof item === 'object' && ['row', 'grid', 'box'].includes(item.type)) {
+              repaired.push(item);
+            } else if (item && typeof item === 'object') {
+              repaired.push(...repairList([item], depth + 1));
+            }
+          }
+          component = { ...component, children: repaired };
+        }
         if (component.type === 'card' && component.children) component = { ...component, children: repairList(component.children, depth + 1) };
         if (component.type === 'tabs') component = { ...component, tabs: component.tabs.map((t) => ({ ...t, children: repairList(t.children, depth + 1) })) };
         if (component.type === 'accordion') component = { ...component, items: component.items.map((i) => ({ ...i, children: repairList(i.children, depth + 1) })) };

@@ -39,6 +39,9 @@ export const UI_LIMITS = Object.freeze({
   maxTimelineEvents: 20,
   maxExecutionSteps: 40,
   maxTabsOrPanels: 8,
+  // A visual group is for arrangement, not for bulk layout: 4 across, 12 total.
+  maxGridColumns: 4,
+  maxGridCells: 12,
   maxCodeChars: 20_000,
   maxInlineImageBytes: 400_000,
 });
@@ -134,18 +137,97 @@ const base = { id, style: styleSchema, title: optTitle };
 
 const textComponent = z.strictObject({ ...base, type: z.literal('text'), format: z.enum(['markdown', 'plain']).optional(), content: paragraph });
 
+/**
+ * Visual groups inside a layout: a `row` of cells, a `grid` of cells, or a bare
+ * `box`. These are presentation primitives, not components — they carry no
+ * semantics and cannot run anything — which is why they are modelled explicitly
+ * rather than accepted as free-form JSON.
+ */
+const layoutItemSchema = z.lazy(() => z.union([
+  componentSchema,
+  z.strictObject({
+    type: z.literal('row'),
+    id: optId,
+    gap: z.enum(['sm', 'md', 'lg']).optional(),
+    children: z.array(layoutItemSchema).min(1).max(6),
+  }),
+  z.strictObject({
+    type: z.literal('grid'),
+    id: optId,
+    columns: z.number().int().min(1).max(4).optional(),
+    gap: z.enum(['sm', 'md', 'lg']).optional(),
+    children: z.array(layoutItemSchema).min(1).max(12),
+  }),
+  z.strictObject({ type: z.literal('box'), id: optId, content: short, tone: tone.optional() }),
+]));
+
 const layoutComponent = z.strictObject({
   ...base,
   type: z.literal('layout'),
-  layout: z.enum(['stack', 'grid', 'columns', 'split']),
+  layout: z.enum(['stack', 'grid', 'columns', 'split', 'vertical']).default('stack'),
+  direction: z.enum(['vertical', 'horizontal']).optional(),
   columns: z.number().int().min(1).max(4).optional(),
   gap: z.enum(['sm', 'md', 'lg']).optional(),
-  children: children(),
+  children: z.array(layoutItemSchema).min(1).max(UI_LIMITS.maxComponents),
+});
+
+/**
+ * `card_group` — several comparable cards as one component. The layout and the
+ * column count belong to the group, not to each card, and an item never carries
+ * children, so a group cannot nest arbitrarily.
+ */
+const cardGroupItem = z.strictObject({
+  id,
+  title: short,
+  icon: z.string().max(24).optional(),
+  badge: optShort,
+  description: optShort,
+});
+
+const cardGroupComponent = z.strictObject({
+  ...base,
+  type: z.literal('card_group'),
+  layout: z.enum(['grid', 'list']).optional(),
+  columns: z.number().int().min(1).max(UI_LIMITS.maxGridColumns).optional(),
+  items: z.array(cardGroupItem).min(1).max(UI_LIMITS.maxItems),
 });
 
 const cardComponent = z.strictObject({ ...base, type: z.literal('card'), subtitle: optShort, icon: z.string().max(20).optional(), body: optParagraph, children: z.array(z.lazy(() => componentSchema)).max(20).optional(), footer: optShort });
 
-const mediaComponent = z.strictObject({ ...base, type: z.literal('media'), media_kind: z.enum(['image', 'video', 'audio']), src: mediaUrl, alt: optShort, caption: optShort, poster: mediaUrl.optional() });
+/**
+ * One media item; `media_type` decides which other fields apply. Every URL is
+ * still checked by `mediaUrl` (https, or a small inline raster), so the group
+ * shape is not a way to smuggle in a `javascript:` source.
+ */
+const mediaItem = z.strictObject({
+  id,
+  media_type: z.enum(['image', 'video', 'icon']),
+  src: mediaUrl.optional(),
+  alt: optShort,
+  caption: optShort,
+  poster: mediaUrl.optional(),
+  controls: optBool,
+  aspect_ratio: z.enum(['16:9', '4:3', '1:1', '3:2', '9:16']).optional(),
+  name: z.string().max(24).optional(),
+  title: optShort,
+});
+
+/** `media` accepts the single shape or a group of `items`. Exactly one. */
+const mediaComponent = z
+  .strictObject({
+    ...base,
+    type: z.literal('media'),
+    media_kind: z.enum(['image', 'video', 'audio']).optional(),
+    src: mediaUrl.optional(),
+    alt: optShort,
+    caption: optShort,
+    poster: mediaUrl.optional(),
+    items: z.array(mediaItem).min(1).max(6).optional(),
+  })
+  .refine((m) => Boolean(m.items) !== Boolean(m.media_kind && m.src), {
+    message: 'media needs either items[] or media_kind + src, not both',
+    path: [],
+  });
 
 const chartComponent = z.strictObject({
   ...base,
@@ -186,6 +268,44 @@ const formField = z.strictObject({
   accept: z.array(z.string().max(20)).max(6).optional(),
 });
 
+/**
+ * `data` — a chart and/or a table describing one dataset, keyed explicitly by
+ * `x_key` / `y_key` (the older `chart` keeps its parallel-arrays shape).
+ */
+const dataChartItem = z.strictObject({
+  id,
+  type: z.literal('chart'),
+  chart_type: z.enum(['bar', 'line', 'area', 'pie']),
+  title: optShort,
+  description: optShort,
+  x_key: z.string().max(64),
+  y_key: z.string().max(64),
+  data: z
+    .array(z.record(z.string().max(64), z.union([z.string().max(200), z.number().finite()])))
+    .min(1)
+    .max(UI_LIMITS.maxChartPoints),
+  x_label: optShort,
+  y_label: optShort,
+});
+
+const dataTableItem = z.strictObject({
+  id,
+  type: z.literal('table'),
+  title: optShort,
+  description: optShort,
+  columns: z.array(z.string().max(80)).min(1).max(UI_LIMITS.maxTableColumns),
+  rows: z
+    .array(z.array(z.union([z.string().max(500), z.number().finite(), z.boolean()])).max(UI_LIMITS.maxTableColumns))
+    .min(1)
+    .max(UI_LIMITS.maxTableRows),
+});
+
+const dataComponent = z.strictObject({
+  ...base,
+  type: z.literal('data'),
+  components: z.array(z.union([dataChartItem, dataTableItem])).min(1).max(2),
+});
+
 const formComponent = z.strictObject({
   ...base,
   type: z.literal('form'),
@@ -207,12 +327,40 @@ const inputComponent = z.strictObject({
   default_value: z.union([z.string().max(2000), z.number().finite(), z.boolean()]).optional(),
 });
 
-const navigationComponent = z.strictObject({
+/**
+ * The presentation half of navigation. A carousel and a popover keep local
+ * state only — neither can act — so this shape does not widen what the model
+ * can drive.
+ */
+const carouselComponent = z.strictObject({
   ...base,
-  type: z.literal('navigation'),
-  orientation: z.enum(['horizontal', 'vertical']).optional(),
-  items: z.array(z.strictObject({ id, label: short, action: z.enum(['navigate', 'continue_lesson', 'next_step', 'start_assessment', 'open_practice']), target: z.enum(NAV_TARGETS).optional() })).min(1).max(UI_LIMITS.maxItems),
+  type: z.literal('carousel'),
+  items: z
+    .array(z.strictObject({ id, title: short, lesson: optShort, description: optShort, icon: z.string().max(24).optional() }))
+    .min(1)
+    .max(UI_LIMITS.maxItems),
 });
+
+const popoverComponent = z.strictObject({
+  ...base,
+  type: z.literal('popover'),
+  trigger: short,
+  items: z.array(z.strictObject({ id, label: short, description: optShort })).min(1).max(UI_LIMITS.maxItems),
+});
+
+/** `navigation` — either wayfinding `items` or presentation `components`. */
+const navigationComponent = z
+  .strictObject({
+    ...base,
+    type: z.literal('navigation'),
+    orientation: z.enum(['horizontal', 'vertical']).optional(),
+    items: z.array(z.strictObject({ id, label: short, action: z.enum(['navigate', 'continue_lesson', 'next_step', 'start_assessment', 'open_practice']), target: z.enum(NAV_TARGETS).optional() })).min(1).max(UI_LIMITS.maxItems).optional(),
+    components: z.array(z.union([carouselComponent, popoverComponent])).min(1).max(2).optional(),
+  })
+  .refine((n) => Boolean(n.items) !== Boolean(n.components), {
+    message: 'navigation needs either items[] or components[], not both',
+    path: [],
+  });
 
 const quizQuestion = z.strictObject({ id, question: short, options: z.array(short).min(2).max(UI_LIMITS.maxOptions), correct_index: z.number().int().min(0).max(UI_LIMITS.maxOptions - 1), explanation: optShort, hint: optShort });
 
@@ -372,12 +520,16 @@ export const COMPONENT_SCHEMAS = Object.freeze({
   text: textComponent,
   layout: layoutComponent,
   card: cardComponent,
+  card_group: cardGroupComponent,
   media: mediaComponent,
   chart: chartComponent,
   table: tableComponent,
+  data: dataComponent,
   form: formComponent,
   input: inputComponent,
   navigation: navigationComponent,
+  carousel: carouselComponent,
+  popover: popoverComponent,
   quiz: quizComponent,
   learning: learningComponent,
   code_editor: codeEditorComponent,
