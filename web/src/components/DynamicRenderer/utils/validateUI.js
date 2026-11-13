@@ -46,6 +46,10 @@ import {
 
 export const CONTAINER_KEYS = {
   layout: (c) => c.children,
+  // Presentation groups hold children too, so the depth counter, the id
+  // deduplicator and the walker must all look inside them.
+  row: (c) => c.children || [],
+  grid: (c) => c.children || [],
   card: (c) => c.children || [],
   tabs: (c) => (c.tabs || []).flatMap((t) => t.children || []),
   accordion: (c) => (c.items || []).flatMap((i) => i.children || []),
@@ -56,6 +60,8 @@ function getChildren(component) {
   switch (component?.type) {
     case 'layout':
     case 'card':
+    case 'row':
+    case 'grid':
       return Array.isArray(component.children) ? component.children : null;
     case 'tabs':
       return Array.isArray(component.tabs) ? component.tabs.flatMap((t) => t.children || []) : null;
@@ -68,7 +74,7 @@ function getChildren(component) {
 
 /** Put children back in the shape the component expects. */
 function setChildren(component, children) {
-  if (component.type === 'layout' || component.type === 'card') return { ...component, children };
+  if (['layout', 'card', 'row', 'grid'].includes(component.type)) return { ...component, children };
   if (component.type === 'tabs') {
     let cursor = 0;
     return {
@@ -92,9 +98,17 @@ function setChildren(component, children) {
 }
 
 /** A text-ish component carrying no words is dropped rather than rendered empty. */
+export const PRESENTATION_TYPES = Object.freeze(['row', 'grid', 'box']);
+
+function isPresentation(item) {
+  return Boolean(item) && PRESENTATION_TYPES.includes(item.type);
+}
+
 function isEmptyContent(component) {
   if (!component) return true;
   if (component.type === 'text') return !String(component.content || '').trim();
+  // A group holds no content of its own; its cells are checked individually.
+  if (isPresentation(component)) return false;
   return false;
 }
 
@@ -149,7 +163,29 @@ function dedupeIds(list, seen, notes) {
  */
 function finalise(components) {
   const notes = [];
-  const pruneEmpty = (list) => (list || []).flatMap((component) => {
+
+  /**
+   * Give every presentation cell a stable id, recursively.
+   *
+   * A cell inside a `grid` is written as `{ "type": "text", "content": "A" }`
+   * with no id — the documented authoring shape — but React needs a key and the
+   * schema requires one. Generating it here keeps the authored JSON honest while
+   * the rendered tree stays addressable.
+   */
+  let cellCounter = 0;
+  const withCellIds = (list) => (list || []).map((item) => {
+    if (!item || typeof item !== 'object') return item;
+    if (isPresentation(item)) {
+      const next = Array.isArray(item.children) ? { ...item, children: withCellIds(item.children) } : { ...item };
+      if (!next.id) next.id = `cell-${(cellCounter += 1).toString(36)}`;
+      return next;
+    }
+    const next = { ...item };
+    if (!next.id) next.id = `auto-${next.type || 'component'}-${(cellCounter += 1).toString(36)}`;
+    return next;
+  });
+
+  const pruneEmpty = (list) => withCellIds(list).flatMap((component) => {
     if (!component) return [];
     if (isEmptyContent(component)) {
       notes.push(issue(`components.${component.id}`, 'a component with empty content was removed', 'empty'));
@@ -205,6 +241,26 @@ function repairTree(raw, { generateId, seen, dropped, issues, depth = 1 }) {
     return null;
   }
   const type = typeof raw.type === 'string' ? raw.type : '';
+
+  // A `row` / `grid` / `box` is not in the component registry — it is a
+  // presentation primitive — but it is legal inside a layout. Recurse through
+  // it here so its cells are repaired individually rather than the whole group
+  // being discarded as an "unknown component".
+  if (isPresentation(raw)) {
+    const group = { ...raw };
+    if (Array.isArray(group.children)) {
+      group.children = group.children
+        .slice(0, UI_LIMITS.maxGridCells || 12)
+        .flatMap((child) => {
+          const repaired = repairTree(child, { generateId, seen, dropped, issues, depth: depth + 1 });
+          return repaired ? [repaired] : [];
+        })
+        .filter(Boolean);
+    }
+    if (group.type === 'box' && !String(group.content || '').trim()) return null;
+    return group;
+  }
+
   if (!schemaFor(type)) {
     dropped.push(issue(`components.${raw.id || type || '?'}`, `unknown component type "${type || 'missing'}"`, 'unknown_type'));
     return null;
@@ -222,6 +278,38 @@ function repairTree(raw, { generateId, seen, dropped, issues, depth = 1 }) {
   while (seen.has(candidate.id)) candidate.id = `${base.slice(0, 58)}-${suffix++}`;
   if (candidate.id !== base) issues.push(issue(`components.${base}`, `duplicate component id "${base}" was renamed`, 'duplicate_id'));
   seen.add(candidate.id);
+
+  // --- collection children ------------------------------------------------
+  // A `media` group and a `data` block hold *several* things. One unusable
+  // item is not a reason to drop the whole block: strip the bad item, keep the
+  // rest, and report it. If nothing usable survives, the component goes.
+  if (type === 'media' && Array.isArray(candidate.items)) {
+    const before = candidate.items.length;
+    candidate.items = candidate.items.filter((item) => {
+      if (!item || typeof item !== 'object') return false;
+      // An icon carries no URL; anything with a source must pass the check.
+      if (item.media_type === 'icon') return true;
+      return typeof item.src === 'string' && isSafeMediaUrl(item.src);
+    });
+    if (candidate.items.length !== before) {
+      issues.push(issue(`components.${candidate.id}.items`, `${before - candidate.items.length} unsafe media source(s) removed`, 'unsafe_media'));
+      dropped.push(issue(`components.${candidate.id}.items`, 'unsafe media source', 'unsafe_media'));
+    }
+    if (!candidate.items.length) return null;
+  }
+
+  if (type === 'data' && Array.isArray(candidate.components)) {
+    candidate.components = candidate.components.filter((item) => {
+      if (!item || typeof item !== 'object') return false;
+      if (item.type === 'chart') return Array.isArray(item.data) && item.data.length > 0;
+      if (item.type === 'table') return Array.isArray(item.columns) && item.columns.length > 0;
+      return false;
+    });
+    if (!candidate.components.length) {
+      dropped.push(issue(`components.${candidate.id}`, 'no non-empty chart or table survived', 'empty'));
+      return null;
+    }
+  }
 
   // --- bounded scalars ----------------------------------------------------
   truncateStrings(candidate, issues, candidate.id);

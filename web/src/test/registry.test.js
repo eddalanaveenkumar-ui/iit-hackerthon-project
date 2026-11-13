@@ -49,7 +49,10 @@ describe('the registry covers the protocol', () => {
     const { getRenderer } = await import('../components/DynamicRenderer/ComponentRegistry');
     const missing = COMPONENT_TYPES.filter((type) => !getRenderer(type));
     expect(missing).toEqual([]);
-    expect(COMPONENT_TYPES).toHaveLength(25);
+    // Guard against a type being registered in one place and forgotten in the
+    // other. The count is pinned so adding a component is a deliberate act that
+    // updates this test, rather than silently drifting.
+    expect(COMPONENT_TYPES).toHaveLength(29);
   });
 
   it('returns nothing for an unknown type rather than a broken renderer', async () => {

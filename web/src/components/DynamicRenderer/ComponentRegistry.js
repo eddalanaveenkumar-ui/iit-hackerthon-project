@@ -18,10 +18,13 @@ import { lazy } from 'react';
 const TextRenderer = lazy(() => import('./components/TextRenderer'));
 const LayoutRenderer = lazy(() => import('./components/LayoutRenderer'));
 const CardRenderer = lazy(() => import('./components/CardRenderer'));
+const CardGroupRenderer = lazy(() => import('./components/CardGroupRenderer'));
 const MediaRenderer = lazy(() => import('./components/MediaRenderer'));
 const DataRenderer = lazy(() => import('./components/DataRenderer'));
 const InputRenderer = lazy(() => import('./components/InputRenderer'));
 const NavigationRenderer = lazy(() => import('./components/NavigationRenderer'));
+const DataGroupRenderer = lazy(() => import('./components/DataGroupRenderer'));
+const NavigationGroups = lazy(() => import('./components/NavigationGroups'));
 const QuizRenderer = lazy(() => import('./components/QuizRenderer'));
 const LearningRenderer = lazy(() => import('./components/LearningRenderer'));
 const CodeRenderer = lazy(() => import('./components/CodeRenderer'));
@@ -45,6 +48,7 @@ export const COMPONENT_REGISTRY = Object.freeze({
   text: TextRenderer,
   layout: LayoutRenderer,
   card: CardRenderer,
+  card_group: CardGroupRenderer,
   media: MediaRenderer,
   // DataRenderer owns chart/table: both are "render this dataset" components with
   // the same empty-state, caption and overflow behaviour.
@@ -53,6 +57,10 @@ export const COMPONENT_REGISTRY = Object.freeze({
   form: QuestionFormRenderer,
   input: InputRenderer,
   navigation: NavigationRenderer,
+  // Presentation-only navigation: a carousel and a popover cannot act.
+  carousel: NavigationGroups,
+  popover: NavigationGroups,
+  data: DataGroupRenderer,
   quiz: QuizRenderer,
   learning: LearningRenderer,
   code_editor: CodeRenderer,
