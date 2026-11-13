@@ -19,6 +19,7 @@ import { Sidebar, SidebarDrawer } from './Sidebar';
 const SECONDARY = {
   '/app/classrooms': 'Classrooms',
   '/app/classrooms/new': 'New classroom',
+  '/app/lesson': 'Lesson',
   '/app/practice': 'Practice',
   '/app/assessments': 'Assessments',
   '/app/progress': 'Progress',

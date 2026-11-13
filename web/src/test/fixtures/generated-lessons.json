@@ -1,0 +1,765 @@
+{
+ "Teach me recursion in Python": {
+  "source": "model",
+  "document": {
+   "version": "1.0",
+   "response_id": "ui_cc9b650dcaa744ad9c",
+   "response_type": "educational_tutorial",
+   "metadata": {
+    "topic": "Recursion in Python",
+    "difficulty": "developing",
+    "language": "en",
+    "estimated_minutes": 12,
+    "strategy": "practice_first"
+   },
+   "learning_objectives": [
+    "Identify the base case and the recursive case",
+    "Trace a recursive call on the stack",
+    "Write a correct recursive function"
+   ],
+   "components": [
+    {
+     "id": "overview",
+     "title": "Recursion in Python",
+     "type": "learning",
+     "objectives": [
+      "Identify the base case and the recursive case",
+      "Trace a recursive call on the stack",
+      "Write a correct recursive function"
+     ],
+     "analogy": "Think of Russian nesting dolls: to open the smallest one you must first open the larger ones, and you stop when there are no dolls left. The stop is the base case; opening the next doll is the recursive call."
+    },
+    {
+     "id": "explain",
+     "type": "text",
+     "format": "markdown",
+     "content": "A recursive function solves a problem by calling **itself** on a smaller version of the same problem.\n\nEvery recursive function needs two parts:\n\n1. **Base case** — the smallest input, answered directly, with no further call. Without it the function never stops.\n2. **Recursive case** — reduce the problem and call the function on that smaller input.\n\nPython limits recursion depth (about 1000 frames by default), which is why deeply nested loops are usually written iteratively."
+    },
+    {
+     "id": "diagram",
+     "title": "The call stack, bottom → top",
+     "type": "diagram",
+     "diagram_type": "stack",
+     "caption": "Follow the arrows; the dashed arrow is the repeat.",
+     "nodes": [
+      {
+       "id": "f1",
+       "label": "factorial(1)",
+       "detail": "returns 1"
+      },
+      {
+       "id": "f2",
+       "label": "factorial(2)",
+       "detail": "2 × 1 = 2"
+      },
+      {
+       "id": "f3",
+       "label": "factorial(3)",
+       "detail": "3 × 2 = 6"
+      },
+      {
+       "id": "f4",
+       "label": "factorial(4)",
+       "detail": "4 × 6 = 24"
+      }
+     ],
+     "edges": [
+      {
+       "from": "f4",
+       "to": "f3",
+       "label": "calls"
+      },
+      {
+       "from": "f3",
+       "to": "f2",
+       "label": "calls"
+      },
+      {
+       "from": "f2",
+       "to": "f1",
+       "label": "calls"
+      }
+     ],
+     "order": [
+      "f1",
+      "f2",
+      "f3",
+      "f4"
+     ]
+    },
+    {
+     "id": "example_code",
+     "title": "Worked example — read it, run it, then change it",
+     "type": "code_editor",
+     "language": "python",
+     "instructions": "Run the example first. Then change an input and predict the result before running again.",
+     "starter_code": "def factorial(n):\n    if n <= 1:            # base case\n        return 1\n    return n * factorial(n - 1)   # recursive case\n\nprint(factorial(4))",
+     "expected_output": "24",
+     "run_enabled": true,
+     "reset_enabled": true
+    },
+    {
+     "id": "trace",
+     "title": "Trace the calls",
+     "type": "execution_trace",
+     "language": "python",
+     "code": "def factorial(n):\n    if n <= 1:            # base case\n        return 1\n    return n * factorial(n - 1)   # recursive case\n\nprint(factorial(4))",
+     "steps": [
+      {
+       "line": 4,
+       "variables": {
+        "n": "4"
+       },
+       "call_stack": [
+        "factorial(4)"
+       ],
+       "note": "not the base case → recurse"
+      },
+      {
+       "line": 4,
+       "variables": {
+        "n": "3"
+       },
+       "call_stack": [
+        "factorial(4)",
+        "factorial(3)"
+       ],
+       "note": "each frame waits for the next"
+      },
+      {
+       "line": 4,
+       "variables": {
+        "n": "2"
+       },
+       "call_stack": [
+        "factorial(4)",
+        "factorial(3)",
+        "factorial(2)"
+       ]
+      },
+      {
+       "line": 2,
+       "variables": {
+        "n": "1"
+       },
+       "call_stack": [
+        "factorial(4)",
+        "factorial(3)",
+        "factorial(2)",
+        "factorial(1)"
+       ],
+       "note": "base case reached — calls start returning"
+      },
+      {
+       "line": 5,
+       "variables": {
+        "result": "24"
+       },
+       "call_stack": [],
+       "note": "2 × 3 × 4 unwinds back to the caller"
+      }
+     ],
+     "playback": true
+    },
+    {
+     "id": "practice",
+     "title": "Your turn",
+     "type": "code_editor",
+     "language": "python",
+     "instructions": "Implement `total(n)` which returns the sum 1 + 2 + … + n using recursion. The base case is n == 0 → 0.",
+     "starter_code": "def total(n):\n    # TODO: base case\n    # TODO: recursive case\n    pass\n\nprint(total(5))",
+     "expected_output": "15",
+     "tests": [
+      {
+       "id": "t1",
+       "name": "total(0) == 0",
+       "args": [
+        0
+       ],
+       "expected": "0"
+      },
+      {
+       "id": "t2",
+       "name": "total(5) == 15",
+       "args": [
+        5
+       ],
+       "expected": "15"
+      }
+     ],
+     "run_enabled": true,
+     "reset_enabled": true
+    },
+    {
+     "id": "check",
+     "title": "Knowledge check",
+     "type": "question_form",
+     "description": "Answer all required questions, then submit once — the tutor reads every answer together.",
+     "questions": [
+      {
+       "id": "q1",
+       "type": "radio",
+       "question": "What happens if a recursive function has no base case?",
+       "required": true,
+       "options": [
+        "It returns None",
+        "It recurses until Python raises RecursionError",
+        "It silently stops at 100 calls",
+        "Python refuses to define it"
+       ]
+      },
+      {
+       "id": "q2",
+       "type": "textarea",
+       "question": "Why does the base case run before the multiplication in factorial(4)?",
+       "placeholder": "Explain what the stack has to do first…",
+       "required": true
+      },
+      {
+       "id": "q3",
+       "type": "code_input",
+       "question": "Write the base case line for total(n) where n == 0.",
+       "required": true,
+       "language": "python"
+      }
+     ],
+     "submission": {
+      "button_text": "Submit answers for evaluation",
+      "action": "submit_ai_questions",
+      "evaluation": "ai_evaluation"
+     }
+    },
+    {
+     "id": "quiz",
+     "title": "Quick quiz",
+     "type": "quiz",
+     "questions": [
+      {
+       "id": "z1",
+       "question": "Which line must come first in a recursive function?",
+       "options": [
+        "The recursive call",
+        "A print statement",
+        "The base case"
+       ],
+       "correct_index": 2,
+       "explanation": "The base case terminates the recursion; without reaching it first, the calls never stop."
+      },
+      {
+       "id": "z2",
+       "question": "factorial(4) makes how many calls to factorial in total?",
+       "options": [
+        "1",
+        "4",
+        "Five including factorial(1)",
+        "Infinite"
+       ],
+       "correct_index": 2,
+       "explanation": "factorial(4), (3), (2), (1) — four frames — and the answer is computed on the way back out."
+      }
+     ],
+     "passing_score": 70,
+     "show_explanations": true
+    },
+    {
+     "id": "next",
+     "title": "Where next",
+     "type": "actions",
+     "actions": [
+      {
+       "id": "a1",
+       "label": "Ask a follow-up question",
+       "action": "continue_lesson",
+       "tone": "neutral"
+      },
+      {
+       "id": "a2",
+       "label": "Practise in the workspace",
+       "action": "open_practice",
+       "tone": "brand",
+       "target": "/app/practice"
+      },
+      {
+       "id": "a3",
+       "label": "Take a graded assessment",
+       "action": "start_assessment",
+       "tone": "neutral",
+       "target": "/app/assessments"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "Teach me derivatives in calculus": {
+  "source": "model",
+  "document": {
+   "version": "1.0",
+   "response_id": "ui_3cf19b081bd04b9cb6",
+   "response_type": "educational_tutorial",
+   "metadata": {
+    "topic": "Derivatives",
+    "difficulty": "developing",
+    "language": "en",
+    "estimated_minutes": 12,
+    "strategy": "worked_example"
+   },
+   "learning_objectives": [
+    "Explain a derivative as an instantaneous rate of change",
+    "Apply the power rule",
+    "Interpret the sign of a derivative"
+   ],
+   "components": [
+    {
+     "id": "overview",
+     "title": "Derivatives",
+     "type": "learning",
+     "objectives": [
+      "Explain a derivative as an instantaneous rate of change",
+      "Apply the power rule",
+      "Interpret the sign of a derivative"
+     ],
+     "analogy": "A car’s speedometer shows the derivative of its position: at any instant, how fast position is changing. You do not need the whole journey — just that moment."
+    },
+    {
+     "id": "explain",
+     "type": "text",
+     "format": "markdown",
+     "content": "The derivative of $f$ at $x$ is the *instantaneous* rate of change:\n\n$$f'(x) = \\lim_{h \\to 0} \\frac{f(x+h) - f(x)}{h}$$\n\nFor powers there is a shortcut, the **power rule**: $\\frac{d}{dx} x^n = n x^{n-1}$.\n\nA derivative is a slope. Positive means the function is increasing there, negative decreasing, zero is a stationary point (a peak, a valley, or a plateau)."
+    },
+    {
+     "id": "formula",
+     "type": "math",
+     "latex": "f'(x) = \\lim_{h \\to 0} \\frac{f(x+h)-f(x)}{h}",
+     "display": "block",
+     "explanation": "The limit of the average rate of change over a shrinking interval."
+    },
+    {
+     "id": "chart",
+     "title": "See the relationship",
+     "type": "chart",
+     "chart_type": "line",
+     "labels": [
+      "-2",
+      "-1",
+      "0",
+      "1",
+      "2",
+      "3"
+     ],
+     "series": [
+      {
+       "name": "f(x) = x²",
+       "data": [
+        4,
+        1,
+        0,
+        1,
+        4,
+        9
+       ]
+      },
+      {
+       "name": "f'(x) = 2x",
+       "data": [
+        -4,
+        -2,
+        0,
+        2,
+        4,
+        6
+       ]
+      }
+     ],
+     "x_label": "x",
+     "y_label": "value"
+    },
+    {
+     "id": "worked",
+     "title": "Worked steps",
+     "type": "math",
+     "latex": "f'(x) = \\lim_{h \\to 0} \\frac{f(x+h)-f(x)}{h}",
+     "display": "block",
+     "steps": [
+      {
+       "label": "Power rule",
+       "latex": "\\frac{d}{dx}x^3 = 3x^2"
+      },
+      {
+       "label": "Sum rule",
+       "latex": "\\frac{d}{dx}(x^3+x^2) = 3x^2 + 2x"
+      },
+      {
+       "label": "Evaluate at x = 2",
+       "latex": "f'(2) = 3(4) + 2(2) = 16"
+      }
+     ]
+    },
+    {
+     "id": "check",
+     "title": "Knowledge check",
+     "type": "question_form",
+     "description": "Answer all required questions, then submit once — the tutor reads every answer together.",
+     "questions": [
+      {
+       "id": "q1",
+       "type": "number",
+       "question": "What is the derivative of x³ at x = 2?",
+       "required": true,
+       "validation": {
+        "min": -1000,
+        "max": 1000
+       }
+      },
+      {
+       "id": "q2",
+       "type": "radio",
+       "question": "A negative derivative at x means…",
+       "required": true,
+       "options": [
+        "f is increasing",
+        "f is decreasing",
+        "f has a maximum",
+        "f is constant"
+       ]
+      },
+      {
+       "id": "q3",
+       "type": "textarea",
+       "question": "Explain in one sentence what the limit h → 0 accomplishes.",
+       "required": true
+      }
+     ],
+     "submission": {
+      "button_text": "Submit answers for evaluation",
+      "action": "submit_ai_questions",
+      "evaluation": "ai_evaluation"
+     }
+    },
+    {
+     "id": "quiz",
+     "title": "Quick quiz",
+     "type": "quiz",
+     "questions": [
+      {
+       "id": "z1",
+       "question": "d/dx (5x²) = ?",
+       "options": [
+        "5x",
+        "10x",
+        "10x²"
+       ],
+       "correct_index": 1,
+       "explanation": "Power rule: multiply by the exponent, then reduce it by one."
+      }
+     ],
+     "passing_score": 70,
+     "show_explanations": true
+    },
+    {
+     "id": "next",
+     "title": "Where next",
+     "type": "actions",
+     "actions": [
+      {
+       "id": "a1",
+       "label": "Ask a follow-up question",
+       "action": "continue_lesson",
+       "tone": "neutral"
+      },
+      {
+       "id": "a2",
+       "label": "Practise in the workspace",
+       "action": "open_practice",
+       "tone": "brand",
+       "target": "/app/practice"
+      },
+      {
+       "id": "a3",
+       "label": "Take a graded assessment",
+       "action": "start_assessment",
+       "tone": "neutral",
+       "target": "/app/assessments"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "How does gradient descent work?": {
+  "source": "model",
+  "document": {
+   "version": "1.0",
+   "response_id": "ui_bc4ef82bc5394a48af",
+   "response_type": "educational_tutorial",
+   "metadata": {
+    "topic": "Gradient descent",
+    "difficulty": "developing",
+    "language": "en",
+    "estimated_minutes": 12,
+    "strategy": "visual_first"
+   },
+   "learning_objectives": [
+    "Explain how a model reduces its loss",
+    "Describe the role of the learning rate",
+    "Predict what happens if the learning rate is wrong"
+   ],
+   "components": [
+    {
+     "id": "overview",
+     "title": "Gradient descent",
+     "type": "learning",
+     "objectives": [
+      "Explain how a model reduces its loss",
+      "Describe the role of the learning rate",
+      "Predict what happens if the learning rate is wrong"
+     ],
+     "analogy": "You are on a foggy hill and want the bottom. You can only feel the slope under your feet. Take a step downhill, feel again, repeat. Step size is the learning rate."
+    },
+    {
+     "id": "explain",
+     "type": "text",
+     "format": "markdown",
+     "content": "Training a model means minimising a **loss** function. Gradient descent does this by repeatedly stepping against the gradient:\n\n$$\\theta_{t+1} = \\theta_t - \\eta \\nabla_\\theta L(\\theta_t)$$\n\n$\\eta$ is the **learning rate**. Too small: training crawls. Too large: the step overshoots the valley and the loss oscillates or diverges.\n\nStochastic variants estimate the gradient from a mini-batch, which is noisier but far cheaper per step."
+    },
+    {
+     "id": "formula",
+     "type": "math",
+     "latex": "\\theta_{t+1} = \\theta_t - \\eta \\nabla_\\theta L(\\theta_t)",
+     "display": "block"
+    },
+    {
+     "id": "diagram",
+     "title": "How it moves",
+     "type": "diagram",
+     "diagram_type": "graph",
+     "caption": "Follow the arrows; the dashed arrow is the repeat.",
+     "nodes": [
+      {
+       "id": "data",
+       "label": "Training batch",
+       "shape": "database"
+      },
+      {
+       "id": "fwd",
+       "label": "Forward pass",
+       "shape": "process"
+      },
+      {
+       "id": "loss",
+       "label": "Loss L",
+       "shape": "io"
+      },
+      {
+       "id": "grad",
+       "label": "Gradient ∇L",
+       "shape": "process"
+      },
+      {
+       "id": "step",
+       "label": "Update θ",
+       "shape": "process"
+      }
+     ],
+     "edges": [
+      {
+       "from": "data",
+       "to": "fwd"
+      },
+      {
+       "from": "fwd",
+       "to": "loss"
+      },
+      {
+       "from": "loss",
+       "to": "grad"
+      },
+      {
+       "from": "grad",
+       "to": "step"
+      },
+      {
+       "from": "step",
+       "to": "fwd",
+       "label": "next batch",
+       "style": "dashed"
+      }
+     ]
+    },
+    {
+     "id": "chart",
+     "title": "See the relationship",
+     "type": "chart",
+     "chart_type": "line",
+     "labels": [
+      "epoch 1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6"
+     ],
+     "series": [
+      {
+       "name": "lr = 0.01",
+       "data": [
+        2.3,
+        1.6,
+        1.2,
+        0.95,
+        0.8,
+        0.72
+       ]
+      },
+      {
+       "name": "lr = 0.5",
+       "data": [
+        2.3,
+        0.9,
+        0.42,
+        0.31,
+        0.3,
+        0.3
+       ]
+      }
+     ],
+     "x_label": "epoch",
+     "y_label": "loss"
+    },
+    {
+     "id": "simulation",
+     "title": "Try the parameters",
+     "type": "simulation",
+     "simulation_kind": "parameters",
+     "description": "Adjust the learning rate and see how many epochs a simple convex loss takes to settle.",
+     "parameters": [
+      {
+       "id": "lr",
+       "label": "Learning rate",
+       "min": 0.001,
+       "max": 1,
+       "step": 0.001,
+       "default": 0.1
+      },
+      {
+       "id": "epochs",
+       "label": "Epochs",
+       "min": 1,
+       "max": 50,
+       "step": 1,
+       "default": 10
+      }
+     ],
+     "formula_latex": "\\theta_{t+1} = \\theta_t - \\eta \\nabla_\\theta L(\\theta_t)",
+     "outcomes": [
+      {
+       "label": "Too small",
+       "detail": "Loss decreases, but slowly — many epochs needed.",
+       "when": {
+        "lr": 0.005
+       }
+      },
+      {
+       "label": "Reasonable",
+       "detail": "Loss drops steadily and settles.",
+       "when": {
+        "lr": 0.1
+       }
+      },
+      {
+       "label": "Too large",
+       "detail": "Loss bounces or diverges; the step overshoots the minimum.",
+       "when": {
+        "lr": 0.9
+       }
+      }
+     ]
+    },
+    {
+     "id": "check",
+     "title": "Knowledge check",
+     "type": "question_form",
+     "description": "Answer all required questions, then submit once — the tutor reads every answer together.",
+     "questions": [
+      {
+       "id": "q1",
+       "type": "radio",
+       "question": "The loss oscillates wildly between epochs. Most likely cause?",
+       "required": true,
+       "options": [
+        "Learning rate too high",
+        "Learning rate too low",
+        "Too much data",
+        "The model is too simple"
+       ]
+      },
+      {
+       "id": "q2",
+       "type": "textarea",
+       "question": "In your own words, what does the gradient tell the update rule?",
+       "required": true
+      },
+      {
+       "id": "q3",
+       "type": "number",
+       "question": "With η = 0.1 and gradient 4, by how much does θ change in one step? (absolute value)",
+       "required": true
+      }
+     ],
+     "submission": {
+      "button_text": "Submit answers for evaluation",
+      "action": "submit_ai_questions",
+      "evaluation": "ai_evaluation"
+     }
+    },
+    {
+     "id": "quiz",
+     "title": "Quick quiz",
+     "type": "quiz",
+     "questions": [
+      {
+       "id": "z1",
+       "question": "Gradient descent moves…",
+       "options": [
+        "along the gradient",
+        "against the gradient",
+        "perpendicular to it"
+       ],
+       "correct_index": 1,
+       "explanation": "The gradient points uphill; we subtract it to go downhill."
+      }
+     ],
+     "passing_score": 70,
+     "show_explanations": true
+    },
+    {
+     "id": "next",
+     "title": "Where next",
+     "type": "actions",
+     "actions": [
+      {
+       "id": "a1",
+       "label": "Ask a follow-up question",
+       "action": "continue_lesson",
+       "tone": "neutral"
+      },
+      {
+       "id": "a2",
+       "label": "Practise in the workspace",
+       "action": "open_practice",
+       "tone": "brand",
+       "target": "/app/practice"
+      },
+      {
+       "id": "a3",
+       "label": "Take a graded assessment",
+       "action": "start_assessment",
+       "tone": "neutral",
+       "target": "/app/assessments"
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

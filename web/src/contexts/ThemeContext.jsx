@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 
-const ThemeContext = createContext(null);
+export const ThemeContext = createContext(null);
 const KEY = 'learnmate.theme';
 
 function initial() {

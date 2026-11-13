@@ -84,7 +84,7 @@ export function ErrorBanner({ message, onDismiss }) {
 }
 
 /* ------------------------------------------------------------------ Toast */
-const ToastContext = createContext(null);
+export const ToastContext = createContext(null);
 
 export function ToastProvider({ children }) {
   const [toasts, setToasts] = useState([]);
