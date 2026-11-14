@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
-  ArrowLeft,
   BookOpen,
   ClipboardCheck,
   FileText,
@@ -11,7 +10,7 @@ import {
   Upload,
 } from 'lucide-react';
 import DynamicRenderer from '../components/DynamicRenderer/DynamicRenderer';
-import { Spinner, cx, useToast } from '../components/ui';
+import { Spinner, useToast } from '../components/ui';
 import { createDynamicActions } from '../lib/dynamicUi';
 import {
   deleteTracsSession,
@@ -75,17 +74,7 @@ function describeTurnFailure(error) {
   };
 }
 
-/** A small labelled block used in the syllabus sidebar. */
-function MasteryDot({ level }) {
-  const tones = [
-    'bg-slate-300 dark:bg-slate-600',
-    'bg-rose-400',
-    'bg-amber-400',
-    'bg-emerald-400',
-    'bg-emerald-600',
-  ];
-  return <span className={cx('inline-block h-2 w-2 shrink-0 rounded-full', tones[Math.min(level || 0, 4)])} aria-hidden />;
-}
+/* -------------------------------------------------------------------------- */
 
 function UploadPanel({ onUploaded }) {
   const [file, setFile] = useState(null);
@@ -587,36 +576,18 @@ export default function Tracs() {
   const learned = topics.filter((t) => (t.mastery || 0) >= 3).length;
 
   return (
-    <div className="flex h-full min-h-0 flex-col lg:flex-row">
-      {/* syllabus sidebar */}
-      <aside className="shrink-0 border-b border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900 lg:w-72 lg:border-b-0 lg:border-r lg:p-4">
-        <button
-          type="button"
-          onClick={() => navigate('/app/tracs')}
-          className="mb-2 inline-flex items-center gap-1 text-xs font-medium text-slate-500 transition-colors hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100"
-        >
-          <ArrowLeft className="h-3 w-3" aria-hidden /> All sessions
-        </button>
+    <div className="flex h-full min-h-0 flex-col">
+      {/* A single line of context instead of the old topic sidebar: which
+          syllabus this is, and how far through it the learner is. */}
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 border-b border-slate-200 bg-white px-3 py-2 dark:border-slate-800 dark:bg-slate-900 sm:px-4">
         <h2 className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100" title={session?.title}>
           {session?.title}
         </h2>
-        <p className="mb-3 text-xs text-slate-500 dark:text-slate-400">
+        <p className="text-xs text-slate-500 dark:text-slate-400">
           {learned} of {topics.length} topics solid · {session?.stats?.answered || 0} answered
         </p>
+      </div>
 
-        <div className="max-h-40 overflow-y-auto lg:max-h-[calc(100vh-14rem)]">
-          <ul className="space-y-1">
-            {topics.map((topic) => (
-              <li key={topic.id} className="flex items-center gap-2 rounded px-1 py-1 text-xs text-slate-600 dark:text-slate-300">
-                <MasteryDot level={topic.mastery} />
-                <span className="truncate" title={topic.title}>{topic.title}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </aside>
-
-      {/* conversation */}
       <section className="flex min-h-0 flex-1 flex-col bg-slate-50 dark:bg-slate-950">
         <div className="flex-1 space-y-3 overflow-y-auto p-3 sm:p-4">
           {messages.map((entry) => (
