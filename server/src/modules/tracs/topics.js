@@ -211,7 +211,7 @@ export function extractTopics(text, { limit = 40 } = {}) {
  *
  * @returns {{ topic: object|null, reason: string }}
  */
-export function chooseNextTopic(topics, { lastTopicId = null, lastVerdict = null, now = new Date() } = {}) {
+export function chooseNextTopic(topics, { lastTopicId = null, lastVerdict = null, lastVerified = true, now = new Date() } = {}) {
   const list = (topics || []).filter((t) => t && t.title);
   if (!list.length) return { topic: null, reason: 'empty_syllabus' };
 
@@ -220,6 +220,13 @@ export function chooseNextTopic(topics, { lastTopicId = null, lastVerdict = null
 
   // A wrong answer: re-ask the same topic. The engine phrases it differently and
   // moves to an easier angle, so this is not a repeat of the same question.
+  //
+  // `lastVerified` false means the answer was never actually judged — the
+  // server could not run it. Re-asking then is not remediation: it punishes the
+  // learner for an outage and burns the attempt counter that triggers teaching.
+  if (last && !lastVerified) {
+    return { topic: last, reason: 'retry_unverified' };
+  }
   if (last && lastVerdict && lastVerdict !== 'correct' && lastVerdict !== 'not_graded') {
     const attempts = (last.attempts || 0) + 1;
     // Three misses in a row means the *explanation* is the problem, and the
@@ -258,8 +265,14 @@ export function chooseNextTopic(topics, { lastTopicId = null, lastVerdict = null
  * schedule follows the step: weak topics come back in a few minutes, solid ones
  * in hours, mastered ones not at all.
  */
-export function applyAnswerToTopic(topic, { verdict, now = new Date() } = {}) {
+export function applyAnswerToTopic(topic, { verdict, verified = true, now = new Date() } = {}) {
   const next = { ...topic };
+  if (!verified) {
+    // Nothing was judged, so nothing is recorded against the topic: no attempt
+    // spent, no mastery moved. Re-asking an unverified question should not look
+    // like the learner failed it twice.
+    return next;
+  }
   next.attempts = (next.attempts || 0) + 1;
   next.lastSeenAt = now.toISOString();
 

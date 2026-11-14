@@ -454,6 +454,180 @@ section('no model configured: the engine still answers');
 }
 
 /* -------------------------------------------------------------------------- */
+/* a missing interpreter is not a learner's mistake                           */
+/* -------------------------------------------------------------------------- */
+
+section('a server without Python does not fail the learner');
+
+{
+  // The production symptom: the API deployed on a Node-only image, `spawn
+  // python3` raised ENOENT, and the learner was told "Not quite" for code that
+  // was never run.
+  process.env.LM_FORCE_RUNTIME_UNAVAILABLE = 'python';
+  const { resetRuntimeCache } = await import('../src/utils/sandbox.js');
+  resetRuntimeCache();
+
+  const graded = await gradeAnswer({
+    question: {
+      id: 'q_code', type: 'code_input', language: 'python',
+      question: 'Write a program that prints 4.', expected_output: '4',
+    },
+    answer: 'print(2 + 2)',
+    topic: { id: 't1', title: 'Variables' },
+    userId: '5f0000000000000000000001',
+  });
+
+  equal('the answer is not marked wrong', graded.verdict === 'incorrect', false);
+  equal('it is recorded as unverified', graded.verdict, 'partly_correct');
+  check('the learner is told why', /no Python interpreter/i.test(graded.feedback), graded.feedback);
+  check('the message never says "Not quite"', !/^not quite/i.test(graded.feedback), graded.feedback);
+  equal('the fault is marked as the server\'s, not the learner\'s', graded.runtimeUnavailable, true);
+
+  // And it must not be recorded as a knowledge gap: the learner demonstrated
+  // nothing wrong, because nothing ran.
+  equal(
+    'no gap is recorded for an unverified answer',
+    gapCategory({ question: { type: 'code_input' }, verdict: graded.verdict, runtimeUnavailable: graded.runtimeUnavailable }),
+    null,
+  );
+  // The reason it matters: without the flag this exact answer is filed against
+  // the learner as a practical difficulty.
+  equal(
+    'without the flag the same answer would be a gap',
+    gapCategory({ question: { type: 'code_input' }, verdict: graded.verdict }),
+    'practical_difficulty',
+  );
+
+  delete process.env.LM_FORCE_RUNTIME_UNAVAILABLE;
+  resetRuntimeCache();
+}
+
+{
+  // With the interpreter present the same answer is verified — the guard is
+  // specific to a missing runtime, not a blanket disable.
+  const { resetRuntimeCache } = await import('../src/utils/sandbox.js');
+  resetRuntimeCache();
+  const graded = await gradeAnswer({
+    question: { id: 'q_ok', type: 'code_input', language: 'python', expected_output: '4' },
+    answer: 'print(2 + 2)',
+    topic: { id: 't1', title: 'Variables' },
+    userId: '5f0000000000000000000001',
+  });
+  equal('with Python installed the answer is verified', graded.verdict, 'correct');
+  equal('a working runtime raises no server fault', Boolean(graded.runtimeUnavailable), false);
+  equal('real code errors are still a gap', gapCategory({ question: { type: 'code_input' }, verdict: 'incorrect', runtimeUnavailable: false }), 'practical_difficulty');
+}
+
+{
+  // An unverified answer must not be scheduled as a retry. Asking the learner
+  // again is remediation for a wrong answer; here nothing was judged, so
+  // "retry_after_incorrect" would spend an attempt that can trigger teaching.
+  const topic = { id: 't1', title: 'Loops', attempts: 0, mastery: 2 };
+  const untouched = applyAnswerToTopic(topic, { verdict: 'partly_correct', verified: false });
+  equal('an unverified answer spends no attempt', untouched.attempts, 0);
+  equal('an unverified answer does not move mastery', untouched.mastery, 2);
+
+  const chosenUnverified = chooseNextTopic([topic], {
+    lastTopicId: 't1', lastVerdict: 'partly_correct', lastVerified: false,
+  });
+  equal('an unverified answer is not a retry for being wrong', chosenUnverified.reason, 'retry_unverified');
+
+  const chosenWrong = chooseNextTopic([topic], {
+    lastTopicId: 't1', lastVerdict: 'incorrect', lastVerified: true,
+  });
+  equal('a genuinely wrong answer still gets a retry', chosenWrong.reason, 'retry_after_incorrect');
+}
+
+/* -------------------------------------------------------------------------- */
+/* every code question can be answered correctly                              */
+/* -------------------------------------------------------------------------- */
+
+section('a code question always has a checkable answer');
+
+{
+  // Without an expected output the grader can only prove the program *runs*, so
+  // a correct answer is stuck at "Almost" forever and after two attempts the
+  // learner is sent to /learn for code that worked.
+  for (const title of ['Python loops and iteration', 'Python functions and recursion', 'Python lists and indexing', 'Python variables']) {
+    const q = localQuestion({ title }, { attempt: 1 });
+    if (q.type !== 'code_input') continue;
+    check(`${title}: carries an expected output`, typeof q.expected_output === 'string' && q.expected_output.length > 0, JSON.stringify(q.expected_output));
+    check(`${title}: the prompt says what to print`, /print/i.test(q.question), q.question);
+  }
+
+  const loop = localQuestion({ title: 'Python loops' }, { attempt: 1 });
+  equal('the loop question is gradeable', loop.expected_output, '10');
+
+  // A model question without one is discarded, not rendered ungradeable.
+  const fallback = localQuestion({ title: 'Python loops' }, { attempt: 1 });
+  const noExpected = normaliseQuestion(
+    { question: 'Write a program that demonstrates loops.', type: 'code_input', language: 'python' },
+    fallback,
+    { title: 'Python loops' },
+  );
+  equal('a code question with no expected output falls back', noExpected.source, 'local');
+  check('and the fallback can be graded', Boolean(noExpected.expected_output), JSON.stringify(noExpected));
+
+  const withExpected = normaliseQuestion(
+    { question: 'Print the sum of 1..4.', type: 'code_input', language: 'python', expected_output: '10' },
+    fallback,
+    { title: 'Python loops' },
+  );
+  equal('a checkable code question is kept', withExpected.source, 'model');
+  equal('and keeps its expected output', withExpected.expected_output, '10');
+}
+
+{
+  // Smoke-only grading means "ran", not "partly right": it must be unverified.
+  process.env.LM_FORCE_RUNTIME_UNAVAILABLE = '';
+  const { resetRuntimeCache } = await import('../src/utils/sandbox.js');
+  resetRuntimeCache();
+  const smoke = await gradeAnswer({
+    question: { id: 'q_smoke', type: 'code_input', language: 'python' },
+    answer: 'print(123)',
+    topic: { id: 't1', title: 'Loops' },
+    userId: '5f0000000000000000000001',
+  });
+  equal('a smoke-only run is not treated as evidence', smoke.unverified, true);
+  equal('and is not scheduled as a wrong-answer retry', chooseNextTopic(
+    [{ id: 't1', title: 'Loops' }],
+    { lastTopicId: 't1', lastVerdict: smoke.verdict, lastVerified: !smoke.unverified },
+  ).reason, 'retry_unverified');
+}
+
+/* -------------------------------------------------------------------------- */
+/* a verdict is announced once, not twice                                    */
+/* -------------------------------------------------------------------------- */
+
+section('feedback does not stutter');
+
+{
+  // Live run showed "Not quite. Not quite. The answer is: ..." — gradeAnswer
+  // prefixed the verdict and feedbackDocument added it again.
+  const wrong = await gradeAnswer({
+    question: { id: 'q_r', type: 'radio', question: 'Pick', options: ['a', 'b'], correct_index: 1 },
+    answer: 'a',
+    topic: { id: 't1', title: 'Loops' },
+    userId: '5f0000000000000000000001',
+  });
+  const doc = feedbackDocument({ verdict: wrong.verdict, feedback: wrong.feedback, sessionId: 's1' });
+  const body = (doc.components || []).map((c) => String(c.content || '')).join(' ');
+  equal('the verdict label appears exactly once', (body.match(/not quite/gi) || []).length, 1);
+  check('the right answer is still shown', /The answer is: b/.test(body), body);
+  check('the label is not duplicated in the raw feedback', !/not quite/i.test(wrong.feedback), wrong.feedback);
+
+  const right = await gradeAnswer({
+    question: { id: 'q_c', type: 'radio', question: 'Pick', options: ['a', 'b'], correct_index: 1 },
+    answer: 'b',
+    topic: { id: 't1', title: 'Loops' },
+    userId: '5f0000000000000000000001',
+  });
+  const doc2 = feedbackDocument({ verdict: right.verdict, feedback: right.feedback, sessionId: 's1' });
+  const body2 = (doc2.components || []).map((c) => String(c.content || '')).join(' ');
+  check('a correct answer is not congratulated twice', !/correct\.\s*(that is right\.|correct\.)/i.test(body2), body2);
+}
+
+/* -------------------------------------------------------------------------- */
 
 console.log(`\n${passed} passed, ${failures.length} failed\n`);
 if (failures.length) {

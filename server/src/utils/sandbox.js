@@ -114,6 +114,38 @@ async function ensureRunner() {
   return runner;
 }
 
+/**
+ * Is a runtime actually installed on this host?
+ *
+ * Deployment images vary: a Node-only image has no `python3`, so every Python
+ * submission fails with `spawn python3 ENOENT` — before a single line of the
+ * student's code runs. Reporting that as "incorrect" blames the student for a
+ * server misconfiguration, which is exactly the bug this guards.
+ *
+ * The check is cached for the process lifetime because the answer cannot change
+ * without a redeploy. A failed probe is remembered too, so a missing runtime is
+ * detected once rather than on every submission.
+ */
+const runtimeCache = new Map();
+
+export async function isRuntimeAvailable(language) {
+  if (language !== 'python') return true; // JavaScript is the server's own runtime.
+  // An explicit override exists so the missing-runtime path can be tested on a
+  // host that *does* have Python. Without it this branch is only reachable in
+  // production — which is how the original bug shipped.
+  if (process.env.LM_FORCE_RUNTIME_UNAVAILABLE === 'python') return false;
+  if (runtimeCache.has('python')) return runtimeCache.get('python');
+  const res = await runProcess('python3', ['--version'], { env: {}, timeoutMs: 5000 });
+  const available = !res.spawnError;
+  runtimeCache.set('python', available);
+  return available;
+}
+
+/** Test seam: forget the cached probe result. */
+export function resetRuntimeCache() {
+  runtimeCache.clear();
+}
+
 function runProcess(cmd, args, { env, cwd, timeoutMs = TIME_LIMIT_MS } = {}) {
   return new Promise((resolve) => {
     const child = spawn(cmd, args, {
@@ -139,7 +171,10 @@ function runProcess(cmd, args, { env, cwd, timeoutMs = TIME_LIMIT_MS } = {}) {
     });
     child.on('error', (err) => {
       clearTimeout(timer);
-      resolve({ stdout, stderr: String(err.message), timedOut, code: -1 });
+      // `ENOENT` means the runtime itself is missing from this host — the
+      // program never started. That is an environment fault, not a verdict on
+      // the code, so it is reported separately rather than as a failure.
+      resolve({ stdout, stderr: String(err.message), timedOut, code: -1, spawnError: err.code || 'ERROR' });
     });
     child.on('close', (code) => {
       clearTimeout(timer);
@@ -208,7 +243,9 @@ export function staticCheck(code, language = 'javascript') {
 
 /**
  * Executes a submission against tests.
- * @returns {Promise<{ executed: boolean, runtime: string, results: [], stdout: string, loadError: string|null, timedOut: boolean }>}
+ * @returns {Promise<{ executed: boolean, runtime: string, results: [], stdout: string, loadError: string|null, timedOut: boolean, runtimeUnavailable?: boolean }>}
+ *   `runtimeUnavailable: true` means this host has no interpreter for the
+ *   language — the submission never ran, so it is not evidence about the code.
  */
 export async function executeCode({ code, language = 'javascript', tests = [], mode = 'tests' }) {
   // mode: 'tests' runs `solve(args)` against test cases (practice workspace).
@@ -224,6 +261,23 @@ export async function executeCode({ code, language = 'javascript', tests = [], m
       stdout: '',
       loadError: null,
       timedOut: false,
+      staticAnalysis: staticInfo,
+    };
+  }
+
+  // Refuse to run rather than run-and-fail: a missing interpreter is reported
+  // as "not executed", which every caller treats as not-graded, so the student
+  // is never told their correct program was wrong.
+  if (language === 'python' && !(await isRuntimeAvailable('python'))) {
+    return {
+      executed: false,
+      runtime: 'python3 (unavailable)',
+      reason: 'This server has no Python interpreter installed, so the submission could not be run. It was analysed statically instead.',
+      results: [],
+      stdout: '',
+      loadError: null,
+      timedOut: false,
+      runtimeUnavailable: true,
       staticAnalysis: staticInfo,
     };
   }

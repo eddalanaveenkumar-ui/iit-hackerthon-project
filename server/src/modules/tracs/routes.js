@@ -272,8 +272,12 @@ router.post(
         const graded = await gradeAnswer({ question: open.question, answer: data.answer, topic, userId: req.userId });
 
         // --- record the evidence, using the existing engines ---------------
+        // "Nothing was actually judged": either this server could not run the
+        // code, or the question had no checkable result and it was only
+        // smoke-tested. Neither is evidence about the learner.
+        const verified = !graded.runtimeUnavailable && !graded.unverified;
         if (topic) {
-          const updated = applyAnswerToTopic(topic, { verdict: graded.verdict, now });
+          const updated = applyAnswerToTopic(topic, { verdict: graded.verdict, verified, now });
           Object.assign(topic, updated);
         }
         session.stats = {
@@ -283,7 +287,11 @@ router.post(
           topics: topics.length,
         };
 
-        const category = gapCategory({ question: open.question, verdict: graded.verdict });
+        const category = gapCategory({
+          question: open.question,
+          verdict: graded.verdict,
+          runtimeUnavailable: Boolean(graded.runtimeUnavailable) || Boolean(graded.unverified),
+        });
         if (category && topic) {
           await recordGap({
             userId: req.userId,
@@ -308,6 +316,7 @@ router.post(
         const next = chooseNextTopic(topics, {
           lastTopicId: open.topicId,
           lastVerdict: graded.verdict,
+          lastVerified: verified,
           now,
         });
 
