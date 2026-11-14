@@ -361,6 +361,9 @@ export async function gradeAnswer({ question, answer, topic, userId }) {
       feedback: execution?.feedback || (verdict === 'not_graded'
         ? 'Your code could not be run, so it was not marked right or wrong.'
         : 'Your code ran, but it did not produce the expected result.'),
+      // Distinguishes "this server cannot run Python" from "your Python was
+      // wrong". Only the second one is evidence about the learner.
+      runtimeUnavailable: Boolean(execution?.runtimeUnavailable),
       misconception: verdict === 'incorrect' && execution?.output
         ? `output was “${String(execution.output).trim().slice(0, 160)}”`
         : null,
@@ -758,8 +761,11 @@ export function assessUnderstanding(results) {
  *   a multiple-choice that picked a specific wrong option -> misconception
  *   anything else wrong                        -> knowledge_gap
  */
-export function gapCategory({ question, verdict }) {
+export function gapCategory({ question, verdict, runtimeUnavailable = false }) {
   if (verdict === 'correct' || verdict === 'not_graded' || verdict === 'unanswered') return null;
+  // A missing interpreter on the server says nothing about the learner. Filing
+  // it as a practical difficulty would put a server outage in their record.
+  if (runtimeUnavailable) return null;
   if (question?.type === 'code_input') return 'practical_difficulty';
   if ((question?.type === 'radio' || question?.type === 'select') && verdict === 'incorrect') return 'misconception';
   return 'knowledge_gap';

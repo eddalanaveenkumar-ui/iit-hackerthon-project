@@ -283,7 +283,11 @@ router.post(
           topics: topics.length,
         };
 
-        const category = gapCategory({ question: open.question, verdict: graded.verdict });
+        const category = gapCategory({
+          question: open.question,
+          verdict: graded.verdict,
+          runtimeUnavailable: Boolean(graded.runtimeUnavailable),
+        });
         if (category && topic) {
           await recordGap({
             userId: req.userId,

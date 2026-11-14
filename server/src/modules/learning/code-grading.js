@@ -104,6 +104,8 @@ function stdoutMatches(stdout, expected) {
  * @returns {Promise<{
  *   question_id: string, language: string, executed: boolean,
  *   verdict: 'correct'|'partly_correct'|'incorrect',
+ *   runtimeUnavailable?: boolean — set when this server could not run the code
+ *     at all (no interpreter). Not evidence about the learner.
  *   feedback: string, output?: string, error?: string, checks: object[]
  * }>}
  */
@@ -156,6 +158,10 @@ export async function gradeCodeAnswer({ question, code }) {
     return {
       ...base,
       verdict: 'partly_correct',
+      // A missing interpreter is a fault in *this server*, not in the answer.
+      // Callers must be able to tell the two apart so they do not file it as a
+      // weakness of the learner.
+      runtimeUnavailable: Boolean(result?.runtimeUnavailable),
       feedback: `${reason} It has been recorded but not verified.`,
     };
   }

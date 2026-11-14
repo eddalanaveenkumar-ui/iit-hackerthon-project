@@ -141,6 +141,51 @@ section('4. A whole submission');
 }
 
 /* -------------------------------------------------------------------------- */
+/* a missing runtime is not a wrong answer                                    */
+/* -------------------------------------------------------------------------- */
+
+section('A missing interpreter is an environment fault, never a verdict');
+
+{
+  // Reproduce the production failure: a Node-only image has no `python3`, so
+  // `spawn` raises ENOENT before any of the student's code runs. That must not
+  // be reported as "incorrect" — the student's program may be perfectly right.
+  process.env.LM_FORCE_RUNTIME_UNAVAILABLE = 'python';
+  const { resetRuntimeCache, executeCode } = await import('../src/utils/sandbox.js');
+  resetRuntimeCache();
+
+  const outcome = await executeCode({ code: 'print(2 + 2)', language: 'python', mode: 'run' });
+  check('the sandbox reports it did not run', outcome.executed === false);
+  check('and flags the missing runtime', outcome.runtimeUnavailable === true, JSON.stringify(outcome.runtime));
+  check('the reason names the cause', /no Python interpreter/i.test(outcome.reason || ''), outcome.reason);
+  check('it is not reported as a code error', !outcome.loadError);
+
+  // The wording the learner sees must not blame them.
+  const graded = await gradeCodeAnswer({ question: q({ expected_output: '4' }), code: 'print(2 + 2)' });
+  check('the verdict is not "incorrect"', graded.verdict !== 'incorrect', graded.verdict);
+  check('it is "partly_correct" (recorded, not verified)', graded.verdict === 'partly_correct', graded.verdict);
+  check('the feedback explains why it was not verified', /not verified|no Python interpreter/i.test(graded.feedback), graded.feedback);
+  check('the feedback does not say the answer was wrong', !/^not quite/i.test(graded.feedback));
+
+  // A wrong answer on a broken host must also not be called wrong — we cannot
+  // know, so we must not claim.
+  const unknown = await gradeCodeAnswer({ question: q({ expected_output: '4' }), code: 'print(999)' });
+  check('an unverifiable answer is still not marked incorrect', unknown.verdict !== 'incorrect', unknown.verdict);
+
+  delete process.env.LM_FORCE_RUNTIME_UNAVAILABLE;
+  resetRuntimeCache();
+}
+
+{
+  // With the runtime present, the same code is correctly graded — proving the
+  // guard did not simply disable Python everywhere.
+  const { resetRuntimeCache } = await import('../src/utils/sandbox.js');
+  resetRuntimeCache();
+  const ok = await gradeCodeAnswer({ question: q({ expected_output: '4' }), code: 'print(2 + 2)' });
+  check('with Python installed the answer is verified', ok.verdict === 'correct', ok.verdict);
+}
+
+/* -------------------------------------------------------------------------- */
 /* reported at the end                                                        */
 /* -------------------------------------------------------------------------- */
 

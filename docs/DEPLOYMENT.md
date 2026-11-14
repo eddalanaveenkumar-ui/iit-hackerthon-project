@@ -37,7 +37,16 @@ Use it as `MONGODB_URI`, optionally adding the database name:
 ## 2. API — Render
 
 The repository includes [`render.yaml`](../render.yaml), so this is a blueprint
-deploy rather than manual configuration.
+deploy rather than manual configuration. It provisions the API as a **Docker**
+service built from [`server/Dockerfile`](../server/Dockerfile).
+
+> **Why Docker and not `runtime: node`?** The code sandbox executes submitted
+> answers by spawning the language's interpreter (`python3` for Python). A bare
+> Node image has no Python, so every Python submission failed with
+> `spawn python3 ENOENT` and the learner was told *"Not quite"* for code that
+> never ran. The Dockerfile installs `python3` and fails its own build if the
+> binary is not on `PATH`. If you deploy to a Node-only host, install the
+> interpreters yourself — see [§5](#5-code-execution-runtime).
 
 1. <https://dashboard.render.com> → **New** → **Blueprint**.
 2. Connect the `eddalanaveenkumar-ui/iit-hackerthon-project` repository.
@@ -118,3 +127,43 @@ cd ../server && npm install && npm start     # serves SPA + API on one port
 
 `server/src/app.js` serves `web/dist` when it exists and falls back to
 `index.html` for client-side routes.
+
+---
+
+## 5. Code execution runtime
+
+Submitted code is graded by **running it**, not by asking a model whether it
+looks right, so the API host must have the interpreters installed. Today only
+Python is executed; Java and SQL answers are analysed statically and reported as
+*unverified* rather than guessed at.
+
+| Requirement | Why |
+| --- | --- |
+| `python3` on `PATH` | runs `code_input` answers in Tracs and code review |
+| Node ≥ 20 | supplied by the base image; runs JavaScript answers via `--permission` |
+
+`server/Dockerfile` installs Python and verifies it at build time:
+
+```dockerfile
+RUN apt-get update && apt-get install -y --no-install-recommends python3 \
+ && rm -rf /var/lib/apt/lists/* \
+ && python3 --version
+```
+
+### What happens if it is missing
+
+The API stays up and degrades honestly. `isRuntimeAvailable('python')` probes
+`python3 --version` once and caches the answer; when it fails, `executeCode`
+returns `executed: false` with `runtimeUnavailable: true` instead of a
+misleading verdict. A Python answer then comes back as `partly_correct` with
+*"This server has no Python interpreter installed, so the submission could not be
+run… It has been recorded but not verified."* — the learner is never told their
+correct code is wrong, and the missing interpreter is **not** filed as a
+weakness in their gap record.
+
+To see that path on a machine that does have Python:
+
+```bash
+cd server
+LM_FORCE_RUNTIME_UNAVAILABLE=python npm run test:tracs
+```

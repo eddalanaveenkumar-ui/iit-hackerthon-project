@@ -1,4 +1,7 @@
-# Render blueprint — deploys the LearnMate AI API as a persistent Node web service.
+# Render blueprint — deploys the LearnMate AI API as a Docker web service.
+#
+# It builds from server/Dockerfile so the image contains BOTH runtimes the app
+# needs: Node for the API, Python for executing student submissions.
 #
 # Usage: push this file, then in Render choose
 #   New → Blueprint → connect this repository → Apply.
@@ -9,12 +12,17 @@
 services:
   - type: web
     name: learnmate-api
-    runtime: node
+    # `runtime: docker` rather than `runtime: node`.
+    #
+    # The API executes student code, and Python submissions need a real Python
+    # interpreter in the image. `runtime: node` is Node-only, so `spawn python3`
+    # failed with ENOENT and every Python answer was graded wrong without ever
+    # running. server/Dockerfile installs python3 alongside Node.
+    runtime: docker
     plan: free
     region: oregon
-    rootDir: server
-    buildCommand: npm install
-    startCommand: npm start
+    dockerfilePath: ./server/Dockerfile
+    dockerContext: ./server
     healthCheckPath: /api/health
     autoDeploy: true
     envVars:

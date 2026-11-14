@@ -454,6 +454,71 @@ section('no model configured: the engine still answers');
 }
 
 /* -------------------------------------------------------------------------- */
+/* a missing interpreter is not a learner's mistake                           */
+/* -------------------------------------------------------------------------- */
+
+section('a server without Python does not fail the learner');
+
+{
+  // The production symptom: the API deployed on a Node-only image, `spawn
+  // python3` raised ENOENT, and the learner was told "Not quite" for code that
+  // was never run.
+  process.env.LM_FORCE_RUNTIME_UNAVAILABLE = 'python';
+  const { resetRuntimeCache } = await import('../src/utils/sandbox.js');
+  resetRuntimeCache();
+
+  const graded = await gradeAnswer({
+    question: {
+      id: 'q_code', type: 'code_input', language: 'python',
+      question: 'Write a program that prints 4.', expected_output: '4',
+    },
+    answer: 'print(2 + 2)',
+    topic: { id: 't1', title: 'Variables' },
+    userId: '5f0000000000000000000001',
+  });
+
+  equal('the answer is not marked wrong', graded.verdict === 'incorrect', false);
+  equal('it is recorded as unverified', graded.verdict, 'partly_correct');
+  check('the learner is told why', /no Python interpreter/i.test(graded.feedback), graded.feedback);
+  check('the message never says "Not quite"', !/^not quite/i.test(graded.feedback), graded.feedback);
+  equal('the fault is marked as the server\'s, not the learner\'s', graded.runtimeUnavailable, true);
+
+  // And it must not be recorded as a knowledge gap: the learner demonstrated
+  // nothing wrong, because nothing ran.
+  equal(
+    'no gap is recorded for an unverified answer',
+    gapCategory({ question: { type: 'code_input' }, verdict: graded.verdict, runtimeUnavailable: graded.runtimeUnavailable }),
+    null,
+  );
+  // The reason it matters: without the flag this exact answer is filed against
+  // the learner as a practical difficulty.
+  equal(
+    'without the flag the same answer would be a gap',
+    gapCategory({ question: { type: 'code_input' }, verdict: graded.verdict }),
+    'practical_difficulty',
+  );
+
+  delete process.env.LM_FORCE_RUNTIME_UNAVAILABLE;
+  resetRuntimeCache();
+}
+
+{
+  // With the interpreter present the same answer is verified — the guard is
+  // specific to a missing runtime, not a blanket disable.
+  const { resetRuntimeCache } = await import('../src/utils/sandbox.js');
+  resetRuntimeCache();
+  const graded = await gradeAnswer({
+    question: { id: 'q_ok', type: 'code_input', language: 'python', expected_output: '4' },
+    answer: 'print(2 + 2)',
+    topic: { id: 't1', title: 'Variables' },
+    userId: '5f0000000000000000000001',
+  });
+  equal('with Python installed the answer is verified', graded.verdict, 'correct');
+  equal('a working runtime raises no server fault', Boolean(graded.runtimeUnavailable), false);
+  equal('real code errors are still a gap', gapCategory({ question: { type: 'code_input' }, verdict: 'incorrect', runtimeUnavailable: false }), 'practical_difficulty');
+}
+
+/* -------------------------------------------------------------------------- */
 
 console.log(`\n${passed} passed, ${failures.length} failed\n`);
 if (failures.length) {
