@@ -628,6 +628,147 @@ section('feedback does not stutter');
 }
 
 /* -------------------------------------------------------------------------- */
+/* a question must be a question                                              */
+/* -------------------------------------------------------------------------- */
+
+section('the local fallback asks something worth answering');
+
+{
+  // The bug this replaces: with no AI key every topic produced
+  //   "What is the main idea of X?"  a) the definition  b) it is unrelated…
+  // where the answer was always option a and the distractors were absurdities.
+  const text = [
+    '## Unit 1: Java Basics',
+    '- Variables and Data Types',
+    '- Operators and Expressions',
+    '- Type Casting',
+    '## Unit 2: Control Flow',
+    '- Conditionals',
+    '- Loops and Iteration',
+    '## Unit 3: Object-Oriented Java',
+    '- Inheritance',
+    '- Polymorphism',
+    '## Unit 4: Errors and Files',
+    '- Exceptions and Error Handling',
+  ].join('\n');
+  const topics = extractTopics(text);
+  check('the syllabus parses', topics.length >= 8, `${topics.length} topics`);
+
+  const absurd = [
+    /unrelated to the rest of the syllabus/i,
+    /only applies to advanced students/i,
+    /has no practical use/i,
+    /main idea of/i,
+  ];
+
+  const asked = topics.map((topic) => ({ topic, q: localQuestion(topic, { attempt: 1 }) }));
+  const choice = asked.filter((x) => x.q.type === 'radio');
+
+  for (const { topic, q } of choice) {
+    const all = [q.question, ...(q.options || [])].join(' ');
+    for (const bad of absurd) {
+      equal(`${topic.title}: no filler option`, bad.test(all), false);
+    }
+    // The answer must be one of the options, and the options must be distinct.
+    check(`${topic.title}: the correct option exists`, Number.isInteger(q.correct_index) && q.correct_index >= 0 && q.correct_index < q.options.length, JSON.stringify(q.options));
+    equal(`${topic.title}: options are distinct`, new Set(q.options).size, q.options.length);
+    // A miss must teach: the explanation is what the learner reads afterwards.
+    check(`${topic.title}: carries a reason`, Boolean(q.explanation) || q.source !== 'local', q.question);
+  }
+
+  // The right answer must not always be first — that is the habit the old
+  // question trained. Over these topics the position has to vary.
+  const positions = new Set(choice.map((x) => x.q.correct_index));
+  check('the correct index is not always option 1', positions.size > 1, [...positions].join(','));
+
+  // And the questions must not all be the same sentence with a noun swapped.
+  const stems = new Set(choice.map((x) => x.q.question.replace(/"[^"]+"/g, 'X')));
+  check('the questions are not one template', stems.size > choice.length / 2, `${stems.size} distinct stems of ${choice.length}`);
+}
+
+{
+  // A known concept gets a specific, factually checkable question.
+  // A loop topic is code: it becomes a runnable question with a checkable output
+  // rather than a multiple choice. (Attempt 2 eases it back to a choice.)
+  const q = localQuestion({ title: 'Loops and Iteration', keywords: [], summary: '' }, { attempt: 1 });
+  equal('a loop topic asks for code', q.type, 'code_input');
+  check('the loop question is concrete', /loop|prints/i.test(q.question), q.question);
+  equal('and has a checkable output', q.expected_output, '10');
+
+  const loopChoice = localQuestion({ title: 'Loops and Iteration', keywords: [], summary: '' }, { attempt: 2 });
+  equal('a second attempt on loops becomes a choice', loopChoice.type, 'radio');
+  check('that choice is about loops', /range|loop|iteration/i.test(loopChoice.question), loopChoice.question);
+  check('and it has a reason', Boolean(loopChoice.explanation), loopChoice.question);
+
+  const casting = localQuestion({ title: 'Type Casting', keywords: [], summary: '' }, { attempt: 1 });
+  check('a casting topic asks about casting', /int\(|cast|convert/i.test(casting.question), casting.question);
+
+  // An unknown topic must still ask something answerable by reasoning.
+  const unknown = localQuestion({ title: 'Binary Trees', keywords: [], summary: '' }, { attempt: 1 });
+  equal('an unknown topic still gets four options', unknown.options.length, 4);
+  check('and the options are distinguishable by reasoning', unknown.correct_index >= 0, JSON.stringify(unknown.options));
+}
+
+{
+  // The explanation reaches the learner when they get it wrong.
+  const q = localQuestion({ title: 'Loops and Iteration', keywords: [], summary: '' }, { attempt: 2 });
+  const wrong = (q.correct_index + 1) % q.options.length;
+  const graded = await gradeAnswer({
+    question: q,
+    answer: q.options[wrong],
+    topic: { id: 't1', title: 'Loops and Iteration' },
+    userId: '5f0000000000000000000001',
+  });
+  equal('a wrong choice is incorrect', graded.verdict, 'incorrect');
+  check('and the feedback says why', /—/.test(graded.feedback), graded.feedback);
+  check('it names the right answer', graded.feedback.includes(q.options[q.correct_index]), graded.feedback);
+}
+
+/* -------------------------------------------------------------------------- */
+/* the /learn loop can actually finish                                       */
+/* -------------------------------------------------------------------------- */
+
+section('checks are distinct and every one must be answered');
+
+{
+  // Getting one of two checks right used to declare the topic "understood" and
+  // skip the second check entirely — the learner was credited for a question they
+  // were never shown.
+  const topic = { title: 'Lists and Tuples', summary: '', keywords: [] };
+  const checks = await authorChecks({ topic, explanation: null, count: 2, userId: '5f0000000000000000000001' });
+  equal('two checks are produced', checks.length, 2);
+  equal('their ids are distinct', new Set(checks.map((c) => c.id)).size, 2);
+  equal('their questions are distinct', new Set(checks.map((c) => c.question)).size, 2);
+
+  const partial = assessUnderstanding([{ question_id: checks[0].id, verdict: 'correct' }], 2);
+  equal('one correct answer of two is NOT understood', partial.understood, false);
+  equal('and the reason says why', partial.reason, 'incomplete');
+  equal('it reports how many were answered', partial.answered, 1);
+  equal('and how many there are', partial.total, 2);
+
+  const full = assessUnderstanding(
+    checks.map((c) => ({ question_id: c.id, verdict: 'correct' })),
+    2,
+  );
+  equal('both correct is understood', full.understood, true);
+  equal('and every check was answered', full.answered, 2);
+
+  const missedOne = assessUnderstanding(
+    [{ question_id: checks[0].id, verdict: 'correct' }, { question_id: checks[1].id, verdict: 'incorrect' }],
+    2,
+  );
+  equal('a miss among them is not understood', missedOne.understood, false);
+  equal('and is recorded as a missed check', missedOne.reason, 'missed_check');
+}
+
+{
+  // Ids are forced unique even if a provider hands back a shared object.
+  const topic = { title: 'Unknown Topic With No Facts', summary: '', keywords: [] };
+  const checks = await authorChecks({ topic, explanation: null, count: 3, userId: '5f0000000000000000000001' });
+  equal('no two checks share an id', new Set(checks.map((c) => c.id)).size, checks.length);
+}
+
+/* -------------------------------------------------------------------------- */
 
 console.log(`\n${passed} passed, ${failures.length} failed\n`);
 if (failures.length) {
