@@ -539,6 +539,63 @@ section('a server without Python does not fail the learner');
 }
 
 /* -------------------------------------------------------------------------- */
+/* every code question can be answered correctly                              */
+/* -------------------------------------------------------------------------- */
+
+section('a code question always has a checkable answer');
+
+{
+  // Without an expected output the grader can only prove the program *runs*, so
+  // a correct answer is stuck at "Almost" forever and after two attempts the
+  // learner is sent to /learn for code that worked.
+  for (const title of ['Python loops and iteration', 'Python functions and recursion', 'Python lists and indexing', 'Python variables']) {
+    const q = localQuestion({ title }, { attempt: 1 });
+    if (q.type !== 'code_input') continue;
+    check(`${title}: carries an expected output`, typeof q.expected_output === 'string' && q.expected_output.length > 0, JSON.stringify(q.expected_output));
+    check(`${title}: the prompt says what to print`, /print/i.test(q.question), q.question);
+  }
+
+  const loop = localQuestion({ title: 'Python loops' }, { attempt: 1 });
+  equal('the loop question is gradeable', loop.expected_output, '10');
+
+  // A model question without one is discarded, not rendered ungradeable.
+  const fallback = localQuestion({ title: 'Python loops' }, { attempt: 1 });
+  const noExpected = normaliseQuestion(
+    { question: 'Write a program that demonstrates loops.', type: 'code_input', language: 'python' },
+    fallback,
+    { title: 'Python loops' },
+  );
+  equal('a code question with no expected output falls back', noExpected.source, 'local');
+  check('and the fallback can be graded', Boolean(noExpected.expected_output), JSON.stringify(noExpected));
+
+  const withExpected = normaliseQuestion(
+    { question: 'Print the sum of 1..4.', type: 'code_input', language: 'python', expected_output: '10' },
+    fallback,
+    { title: 'Python loops' },
+  );
+  equal('a checkable code question is kept', withExpected.source, 'model');
+  equal('and keeps its expected output', withExpected.expected_output, '10');
+}
+
+{
+  // Smoke-only grading means "ran", not "partly right": it must be unverified.
+  process.env.LM_FORCE_RUNTIME_UNAVAILABLE = '';
+  const { resetRuntimeCache } = await import('../src/utils/sandbox.js');
+  resetRuntimeCache();
+  const smoke = await gradeAnswer({
+    question: { id: 'q_smoke', type: 'code_input', language: 'python' },
+    answer: 'print(123)',
+    topic: { id: 't1', title: 'Loops' },
+    userId: '5f0000000000000000000001',
+  });
+  equal('a smoke-only run is not treated as evidence', smoke.unverified, true);
+  equal('and is not scheduled as a wrong-answer retry', chooseNextTopic(
+    [{ id: 't1', title: 'Loops' }],
+    { lastTopicId: 't1', lastVerdict: smoke.verdict, lastVerified: !smoke.unverified },
+  ).reason, 'retry_unverified');
+}
+
+/* -------------------------------------------------------------------------- */
 /* a verdict is announced once, not twice                                    */
 /* -------------------------------------------------------------------------- */
 

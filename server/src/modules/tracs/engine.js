@@ -139,6 +139,28 @@ export function pickQuestionType(topic, { attempt = 1, subject = '' } = {}) {
   return topic?.attempts ? 'text_input' : 'radio';
 }
 
+/**
+ * A code question that has a checkable answer.
+ *
+ * The answer must have a definite result for the grader to credit it: the
+ * program is run and its stdout compared with `expected_output`. A prompt like
+ * "demonstrate loops" has no single right output, so it could never be marked
+ * correct — only "runs".
+ */
+function codeStub(topic) {
+  const text = `${topic?.title || ''} ${(topic?.keywords || []).join(' ')}`.toLowerCase();
+  if (/function|recursion|argument|parameter|return/.test(text)) {
+    return { prompt: 'Write a function `add(a, b)` that returns the sum, then print `add(2, 3)`.', expected: '5' };
+  }
+  if (/loop|iterat|range|repeat/.test(text)) {
+    return { prompt: 'Write a loop that adds the numbers 1 to 4 together and prints the total.', expected: '10' };
+  }
+  if (/array|list|element|index|slice/.test(text)) {
+    return { prompt: 'Make a list of the numbers 1, 2 and 3, then print how many items it holds.', expected: '3' };
+  }
+  return { prompt: `Declare a variable called \`answer\` set to 42, then print it.`, expected: '42' };
+}
+
 /** The deterministic question, used when the model is unavailable or malformed. */
 export function localQuestion(topic, { attempt = 1, subject = '' } = {}) {
   const type = pickQuestionType(topic, { attempt, subject });
@@ -175,12 +197,15 @@ export function localQuestion(topic, { attempt = 1, subject = '' } = {}) {
     };
   }
   if (type === 'code_input') {
+    // Every code question carries an expected output. Without one the grader can
+    // only prove the program *runs*, so a correct answer is stuck at
+    // "Almost — not checked" forever and the learner is never credited. Each
+    // stub below prints a fixed value, so any correct program for it matches.
     return {
       ...base,
-      question: `Write a short program that demonstrates "${topic.title}".`,
+      question: `${codeStub(topic).prompt} (Your program should print ${codeStub(topic).expected}.)`,
       language: 'python',
-      // No expected output: the answer is executed and reported as
-      // "runs without error", never silently marked correct.
+      expected_output: codeStub(topic).expected,
     };
   }
   return {
@@ -231,7 +256,7 @@ Rules:
 - It must be answerable from the syllabus excerpt, and must test understanding rather than recall of a phrase.
 - Choose the type that fits the concept: "radio" (multiple choice), "text_input" (short answer), "textarea" (explain in your own words), "code_input", "number", "boolean".
 - For "radio" give 2-4 options and say which index is correct.
-- For "code_input" give a "language" and, when the answer has a definite result, an "expected_output".
+- For "code_input" you MUST give both a "language" and an "expected_output": the exact stdout the program prints. Write the question so it has one provable result — print a computed value, not "demonstrate X". A code question without an expected output cannot be graded and will be discarded.
 - Do not reveal the answer in the question.
 - Keep the question under 300 characters.
 
@@ -291,9 +316,14 @@ export function normaliseQuestion(raw, fallback, topic) {
   }
   if (type === 'code_input') {
     out.language = ['python', 'javascript', 'java', 'sql'].includes(raw.language) ? raw.language : 'python';
-    if (raw.expected_output !== undefined && raw.expected_output !== null) {
-      out.expected_output = String(raw.expected_output).slice(0, 4000);
-    }
+    // A code question with no definable result cannot be graded, so it is not
+    // rendered: the fallback always carries one. Accepting it would mean a
+    // correct program could never be marked correct.
+    const expected = raw.expected_output === undefined || raw.expected_output === null
+      ? ''
+      : String(raw.expected_output);
+    if (!expected.trim()) return { ...fallback, source: 'local' };
+    out.expected_output = expected.slice(0, 4000);
     if (Array.isArray(raw.tests)) {
       out.tests = raw.tests.slice(0, 8).map((t, i) => ({
         id: String(t?.id || `t${i + 1}`).slice(0, 40),
@@ -355,8 +385,13 @@ export async function gradeAnswer({ question, answer, topic, userId }) {
     const verdict = ['correct', 'partly_correct', 'incorrect', 'not_graded'].includes(verbatim)
       ? verbatim
       : 'not_graded';
+    // A question with no checkable result can only be smoke-tested: the program
+    // runs but nothing is compared. Its "partly_correct" therefore means "ran",
+    // not "partly right", and must not be scheduled as a retry.
+    const unverified = Boolean(execution?.runtimeUnavailable) || Boolean(execution?.checks?.length === 1 && execution.checks[0]?.id === 'smoke');
     return {
       verdict,
+      unverified,
       score: verdict === 'correct' ? 100 : verdict === 'partly_correct' ? 60 : 0,
       feedback: execution?.feedback || (verdict === 'not_graded'
         ? 'Your code could not be run, so it was not marked right or wrong.'

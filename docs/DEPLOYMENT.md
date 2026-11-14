@@ -142,6 +142,12 @@ Python is executed; Java and SQL answers are analysed statically and reported as
 | `python3` on `PATH` | runs `code_input` answers in Tracs and code review |
 | Node ≥ 20 | supplied by the base image; runs JavaScript answers via `--permission` |
 
+Every code question carries an `expected_output`, so the grader compares stdout
+and can mark a working program **correct**. A question with no checkable result
+could only ever be smoke-tested ("runs, not checked"), and a learner would never
+be credited for it — so model-authored code questions without one are discarded
+in favour of the local fallback, which always has one.
+
 `server/Dockerfile` installs Python and verifies it at build time:
 
 ```dockerfile
