@@ -153,12 +153,17 @@ function isChat(pathname) {
 /**
  * Routes that own the whole viewport and scroll internally.
  *
- * tracs is a chat: the transcript scrolls, the composer does not. Sticky would
- * not do — the page scrolled behind it, which is exactly the complaint. Bounding
- * the shell is what keeps the input where the user expects it.
+ * Only a tracs *conversation* (`/app/tracs/:sessionId`) is a chat: its transcript
+ * scrolls and its composer does not, which needs a bounded shell — sticky alone
+ * let the page scroll behind the input.
+ *
+ * `/app/tracs` on its own is NOT that route. It is the upload panel plus the
+ * session list, a page taller than the viewport that must scroll normally.
+ * Treating it as a chat shell locked it to `h-dvh overflow-hidden`, so the page
+ * could not be scrolled at all and the bottom of it was unreachable.
  */
 function isFullHeight(pathname) {
-  return pathname === '/app/tracs' || pathname.startsWith('/app/tracs/');
+  return /^\/app\/tracs\/[^/]+/.test(pathname);
 }
 
 function MenuLink({ to, icon: Icon, label, onDone }) {

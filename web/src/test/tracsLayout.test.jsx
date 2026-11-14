@@ -31,8 +31,20 @@ describe('the tracs chat shell', () => {
     expect(layout).toMatch(/isFullHeight\(location\.pathname\)\s*&&\s*'min-h-0'/);
   });
 
-  it('treats every tracs URL as full height', () => {
-    expect(layout).toMatch(/pathname === '\/app\/tracs' \|\| pathname\.startsWith\('\/app\/tracs\/'\)/);
+  it('bounds only a conversation, not the tracs index', () => {
+    // This used to assert the *source text* of the rule, so it passed while the
+    // rule itself was wrong: `/app/tracs` was treated as a chat shell, and the
+    // upload page — which is taller than the viewport — could not scroll at all.
+    // Test the behaviour, not the spelling.
+    const source = layout.match(/function isFullHeight\(pathname\) \{\s*return (.+?);\s*\}/s);
+    expect(source).toBeTruthy();
+    const rule = new Function('pathname', `return ${source[1]};`);
+
+    expect(rule('/app/tracs/abc123')).toBe(true);
+    expect(rule('/app/tracs/abc123/')).toBe(true);
+    expect(rule('/app/tracs')).toBe(false);
+    expect(rule('/app/tracs/')).toBe(false);
+    expect(rule('/app')).toBe(false);
   });
 
   it('fills that height in the page', () => {
