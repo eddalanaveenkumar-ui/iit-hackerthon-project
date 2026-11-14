@@ -539,6 +539,38 @@ section('a server without Python does not fail the learner');
 }
 
 /* -------------------------------------------------------------------------- */
+/* a verdict is announced once, not twice                                    */
+/* -------------------------------------------------------------------------- */
+
+section('feedback does not stutter');
+
+{
+  // Live run showed "Not quite. Not quite. The answer is: ..." — gradeAnswer
+  // prefixed the verdict and feedbackDocument added it again.
+  const wrong = await gradeAnswer({
+    question: { id: 'q_r', type: 'radio', question: 'Pick', options: ['a', 'b'], correct_index: 1 },
+    answer: 'a',
+    topic: { id: 't1', title: 'Loops' },
+    userId: '5f0000000000000000000001',
+  });
+  const doc = feedbackDocument({ verdict: wrong.verdict, feedback: wrong.feedback, sessionId: 's1' });
+  const body = (doc.components || []).map((c) => String(c.content || '')).join(' ');
+  equal('the verdict label appears exactly once', (body.match(/not quite/gi) || []).length, 1);
+  check('the right answer is still shown', /The answer is: b/.test(body), body);
+  check('the label is not duplicated in the raw feedback', !/not quite/i.test(wrong.feedback), wrong.feedback);
+
+  const right = await gradeAnswer({
+    question: { id: 'q_c', type: 'radio', question: 'Pick', options: ['a', 'b'], correct_index: 1 },
+    answer: 'b',
+    topic: { id: 't1', title: 'Loops' },
+    userId: '5f0000000000000000000001',
+  });
+  const doc2 = feedbackDocument({ verdict: right.verdict, feedback: right.feedback, sessionId: 's1' });
+  const body2 = (doc2.components || []).map((c) => String(c.content || '')).join(' ');
+  check('a correct answer is not congratulated twice', !/correct\.\s*(that is right\.|correct\.)/i.test(body2), body2);
+}
+
+/* -------------------------------------------------------------------------- */
 
 console.log(`\n${passed} passed, ${failures.length} failed\n`);
 if (failures.length) {

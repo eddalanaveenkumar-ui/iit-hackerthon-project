@@ -379,9 +379,12 @@ export async function gradeAnswer({ question, answer, topic, userId }) {
     return {
       verdict: correct ? 'correct' : 'incorrect',
       score: correct ? 100 : 0,
+      // The verdict label ("Correct." / "Not quite.") is added by
+      // feedbackDocument. Repeating it here produced "Not quite. Not quite. The
+      // answer is: ..." in the learner's view — so this says only the reason.
       feedback: correct
-        ? 'Correct.'
-        : `Not quite. The answer is: ${question.options?.[question.correct_index]}`,
+        ? 'That is right.'
+        : `The answer is: ${question.options?.[question.correct_index]}`,
       misconception: correct ? null : `chose "${String(text).slice(0, 160)}" instead of "${String(question.options?.[question.correct_index] || '').slice(0, 160)}"`,
       correct_answer: question.options?.[question.correct_index] || null,
       execution: null,
@@ -432,7 +435,9 @@ export async function gradeAnswer({ question, answer, topic, userId }) {
     verdict,
     score: Number.isFinite(Number(data?.score)) ? Math.max(0, Math.min(100, Number(data.score))) : verdict === 'correct' ? 100 : verdict === 'partly_correct' ? 60 : 0,
     feedback: String(perQuestion?.feedback || fallback.per_question?.[0]?.feedback || data?.overall || '').slice(0, 1200)
-      || (verdict === 'correct' ? 'That is right.' : 'Not quite — have another look at the explanation.'),
+      // Same rule as the multiple-choice branch: feedbackDocument owns the
+      // verdict label, so this string must not open with one of its own.
+      || (verdict === 'correct' ? 'That is right.' : 'Have another look at the explanation.'),
     misconception: verdict === 'correct' ? null : String(perQuestion?.hint || data?.gaps?.[0] || '').slice(0, 300) || null,
     correct_answer: null,
     execution: null,
