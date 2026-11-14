@@ -146,6 +146,25 @@ export function resetRuntimeCache() {
   runtimeCache.clear();
 }
 
+/**
+ * Can this deployment run the given language *right now*?
+ *
+ * Synchronous, answering only from what has already been probed. It exists so
+ * question authoring can avoid writing a question the server cannot grade: on a
+ * Node-only image every Python question came back unverified, and the learner
+ * got a paragraph about the server's missing interpreter instead of an answer.
+ *
+ * Unknown means "assume yes", so this can never silently downgrade a capable
+ * deployment — the async probe still runs on the real submission path.
+ *
+ * @returns {boolean|null} false only when a probe has positively failed.
+ */
+export function runtimeAvailability(language) {
+  if (language && language !== 'python') return true;
+  if (process.env.LM_FORCE_RUNTIME_UNAVAILABLE === 'python') return false;
+  return runtimeCache.has('python') ? runtimeCache.get('python') : null;
+}
+
 function runProcess(cmd, args, { env, cwd, timeoutMs = TIME_LIMIT_MS } = {}) {
   return new Promise((resolve) => {
     const child = spawn(cmd, args, {

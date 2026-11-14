@@ -4,7 +4,7 @@ import { prompts } from '../ai/prompts.js';
 import { parseComponent, repairUiDocument, UI_PROTOCOL_VERSION, UI_LIMITS } from '../ai/ui/protocol.js';
 import { localEvaluateAnswers } from '../ai/ui/teaching-engine.js';
 import { gradeCodingAnswers, applyExecutionVerdicts } from '../learning/code-grading.js';
-import { executeCode } from '../../utils/sandbox.js';
+import { executeCode, runtimeAvailability } from '../../utils/sandbox.js';
 import { factsFor, languageFor } from './question-bank.js';
 
 /**
@@ -127,7 +127,7 @@ const MODEL_TO_PROTOCOL = {
 };
 
 /** Which question type fits which topic, so the mix is not all multiple choice. */
-export function pickQuestionType(topic, { attempt = 1, subject = '' } = {}) {
+export function pickQuestionType(topic, { attempt = 1, subject = '', language = null } = {}) {
   const text = `${topic?.title || ''} ${(topic?.keywords || []).join(' ')}`.toLowerCase();
   const isCode = /python|java|sql|javascript|code|program|function|loop|array|recursion|algorithm|complexity|class/.test(text);
   const isNumeric = /math|equation|derivative|integral|probability|statistic|calculation|formula|mean|variance/.test(text)
@@ -139,7 +139,18 @@ export function pickQuestionType(topic, { attempt = 1, subject = '' } = {}) {
   // A second attempt always gets an easier format than the first, so a learner
   // who missed a free-recall question gets a recognisable one.
   if (attempt >= 2) return 'radio';
-  if (isCode) return /code|program|function|loop/.test(text) ? 'code_input' : 'radio';
+  if (isCode) {
+    // Only ask for code the server can actually run.
+    //
+    // The generated snippets are Python, and a Node-only deployment has no
+    // interpreter: the answer came back "could not be run, analysed statically,
+    // not verified", which tells the learner about our infrastructure and marks
+    // nothing. A multiple choice on the same topic is gradeable everywhere, so
+    // that is what an ungradeable topic falls back to.
+    const runnable = runtimeAvailability(language || 'python') !== false;
+    if (!runnable) return 'radio';
+    return /code|program|function|loop/.test(text) ? 'code_input' : 'radio';
+  }
   if (isNumeric) return 'number';
   if (isDefinitional) return 'text_input';
   return topic?.attempts ? 'text_input' : 'radio';
@@ -260,7 +271,7 @@ function shuffleStable(items, seed) {
 
 /** The deterministic question, used when the model is unavailable or malformed. */
 export function localQuestion(topic, { attempt = 1, subject = '', language = null } = {}) {
-  const type = pickQuestionType(topic, { attempt, subject });
+  const type = pickQuestionType(topic, { attempt, subject, language });
   const summary = String(topic?.summary || '').slice(0, 240);
   const base = { id: `q${Date.now().toString(36)}`, type, hint: undefined };
 
@@ -321,6 +332,9 @@ export async function authorQuestion({
   conversationId,
 }) {
   const fallback = localQuestion(topic, { attempt, subject, language });
+  // Read per call: the probe caches for the process, so this is cheap, and it
+  // keeps the prompt honest on a deployment that cannot run the learner's code.
+  const codeRunnable = language ? runtimeAvailability(language) !== false : runtimeAvailability() !== false;
 
   const previousBlock = previous
     ? `THE PREVIOUS ANSWER: verdict "${previous.verdict}".
@@ -345,6 +359,9 @@ Rules:
 - Keep the question under 300 characters.
 - STAY IN ONE LANGUAGE. ${language ? `This syllabus is ${LANGUAGE_NAMES[language] || language}; write every code sample in ${LANGUAGE_NAMES[language] || language} and use its real syntax.` : 'Use one language consistently.'} Never mix two languages in the same snippet, and never ask about another language's behaviour — "what happens in Python?" is wrong on a Java syllabus.
 - A code sample must be something the learner could actually type and run. Do not invent syntax that would not execute: \`x = 10; x = 'hello'; x = 3.14\` is valid in neither Python nor Java. If you cannot write it correctly, ask in prose instead.
+- ${codeRunnable
+    ? 'Code questions are executed and graded against their expected output.'
+    : 'THIS SERVER CANNOT EXECUTE CODE. Do not use the "code_input" type and do not ask the learner to write a program — it could not be graded and would be reported as unverified. Ask a "radio" or "text_input" question that tests the same idea in words, or by reading a snippet.'}
 
 Return ONLY JSON:
 {"question":"…","type":"radio","options":["…"],"correct_index":0,"expected_output":"…","language":"python","hint":"a nudge that does not give it away","tests":[]}`,
@@ -478,6 +495,9 @@ export async function gradeAnswer({ question, answer, topic, userId }) {
     return {
       verdict,
       unverified,
+      // The technical why, kept separate from the learner-facing feedback so the
+      // admin console and the logs can still answer "why was this not graded?"
+      reason: execution?.reason || null,
       score: verdict === 'correct' ? 100 : verdict === 'partly_correct' ? 60 : 0,
       feedback: execution?.feedback || (verdict === 'not_graded'
         ? 'Your code could not be run, so it was not marked right or wrong.'
@@ -662,14 +682,25 @@ export function feedbackDocument({
   });
 
   if (topic) {
+    // A topic with no recorded attempts shows "0 of 0 — 0%", which reads as "you
+    // scored nothing". It means "nothing has been judged yet", and after an
+    // unverified answer that is the honest statement: the server could not run
+    // the code, so no attempt was recorded. Say that instead of a zero.
+    const attempts = topic.attempts || 0;
+    const scored = attempts > 0;
     components.push({
       id: `topic_progress_${encoder()}`,
       type: 'progress',
       title: 'Where this topic stands',
-      items: [
-        { id: 'correct', label: 'Correct answers', value: Math.round(((topic.correct || 0) / Math.max(topic.attempts || 1, 1)) * 100), detail: `${topic.correct || 0} of ${topic.attempts || 0}` },
-        { id: 'mastery', label: 'Mastery', value: Math.round(((topic.mastery || 0) / 4) * 100), detail: ['Not started', 'Needs work', 'Getting there', 'Solid', 'Mastered'][Math.min(topic.mastery || 0, 4)] },
-      ],
+      items: scored
+        ? [
+          { id: 'correct', label: 'Correct answers', value: Math.round(((topic.correct || 0) / attempts) * 100), detail: `${topic.correct || 0} of ${attempts}` },
+          { id: 'mastery', label: 'Mastery', value: Math.round(((topic.mastery || 0) / 4) * 100), detail: ['Not started', 'Needs work', 'Getting there', 'Solid', 'Mastered'][Math.min(topic.mastery || 0, 4)] },
+        ]
+        : [
+          { id: 'correct', label: 'Graded answers', value: 0, detail: 'none yet' },
+          { id: 'mastery', label: 'Mastery', value: 0, detail: 'Nothing recorded yet' },
+        ],
     });
   }
 

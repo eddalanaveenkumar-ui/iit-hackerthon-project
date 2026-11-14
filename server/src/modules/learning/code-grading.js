@@ -154,7 +154,12 @@ export async function gradeCodeAnswer({ question, code }) {
 
   if (!result?.executed) {
     // Java/SQL, or a runtime that refused to start: never pretend it passed.
-    const reason = result?.reason || result?.loadError || 'The sandbox did not run this submission.';
+    //
+    // The learner gets a sentence about their answer, not about our machine.
+    // "This server has no Python interpreter installed" was accurate, and the
+    // wrong thing to say: it asks a student to care about our deployment and
+    // leaves them unsure whether they had answered well. The reason stays in the
+    // structured field, where developers and the admin console can read it.
     return {
       ...base,
       verdict: 'partly_correct',
@@ -162,7 +167,8 @@ export async function gradeCodeAnswer({ question, code }) {
       // Callers must be able to tell the two apart so they do not file it as a
       // weakness of the learner.
       runtimeUnavailable: Boolean(result?.runtimeUnavailable),
-      feedback: `${reason} It has been recorded but not verified.`,
+      reason: result?.reason || result?.loadError || 'The sandbox did not run this submission.',
+      feedback: 'Your answer was saved, but it could not be run here, so I cannot mark it right or wrong. Nothing is counted against you.',
     };
   }
 

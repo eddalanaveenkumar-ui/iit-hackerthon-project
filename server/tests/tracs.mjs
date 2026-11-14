@@ -38,6 +38,7 @@ import {
   CHECK_COUNT,
 } from '../src/modules/tracs/engine.js';
 import { factsFor, languageFor } from '../src/modules/tracs/question-bank.js';
+import { isRuntimeAvailable, resetRuntimeCache, runtimeAvailability } from '../src/utils/sandbox.js';
 import { parseUiDocument } from '../src/modules/ai/ui/protocol.js';
 
 let passed = 0;
@@ -481,7 +482,12 @@ section('a server without Python does not fail the learner');
 
   equal('the answer is not marked wrong', graded.verdict === 'incorrect', false);
   equal('it is recorded as unverified', graded.verdict, 'partly_correct');
-  check('the learner is told why', /no Python interpreter/i.test(graded.feedback), graded.feedback);
+  // The learner is told what it means for *them* — not that our image lacks an
+  // interpreter. "This server has no Python interpreter installed" was accurate
+  // and useless: it puts our deployment in front of their answer.
+  check('the learner is told it was not marked', /could not be run here|cannot mark it/i.test(graded.feedback), graded.feedback);
+  check('and is told nothing is held against them', /nothing is counted against you/i.test(graded.feedback), graded.feedback);
+  check('the technical reason is still recorded', /no Python interpreter/i.test(String(graded.reason || '')), String(graded.reason || ''));
   check('the message never says "Not quite"', !/^not quite/i.test(graded.feedback), graded.feedback);
   equal('the fault is marked as the server\'s, not the learner\'s', graded.runtimeUnavailable, true);
 
@@ -895,6 +901,60 @@ section('a wrong answer says what went wrong and shows an example');
   const rightDoc = feedbackDocument({ verdict: 'correct', feedback: 'x', topic: null, nextQuestion: nextForm });
   const rightTexts = rightDoc.components.filter((c) => c.type === 'text').map((c) => c.content).join(' ');
   check('a correct answer extends instead', /one step further/.test(rightTexts), rightTexts.slice(-120));
+}
+
+/* -------------------------------------------------------------------------- */
+/* never ask for code this server cannot run                                 */
+/* -------------------------------------------------------------------------- */
+
+section('a deployment without Python does not set ungradeable questions');
+
+{
+  // The failure this prevents: on Vercel (Node only) every Python code question
+  // came back "could not be run, analysed statically, not verified". The learner
+  // was shown a paragraph about our missing interpreter and told nothing about
+  // their own answer.
+  const loops = { title: 'Loops and Iteration', keywords: ['loop'], summary: '', attempts: 0 };
+
+  delete process.env.LM_FORCE_RUNTIME_UNAVAILABLE;
+  await isRuntimeAvailable('python');
+  resetRuntimeCache();
+  await isRuntimeAvailable('python');
+
+  // With a working interpreter, a codeable topic still gets a code question.
+  if (runtimeAvailability('python') === true) {
+    equal('a python host asks for code', pickQuestionType(loops, { attempt: 1 }), 'code_input');
+  }
+
+  process.env.LM_FORCE_RUNTIME_UNAVAILABLE = 'python';
+  try {
+    equal('an ungradeable runtime is detected', runtimeAvailability('python'), false);
+    equal('so the question is a choice, not code', pickQuestionType(loops, { attempt: 1 }), 'radio');
+
+    const q = localQuestion(loops, { attempt: 1 });
+    equal('the question is not code', q.type, 'radio');
+    check('and it is answerable', Array.isArray(q.options) && Number.isInteger(q.correct_index), JSON.stringify(q).slice(0, 120));
+  } finally {
+    delete process.env.LM_FORCE_RUNTIME_UNAVAILABLE;
+    resetRuntimeCache();
+  }
+}
+
+{
+  // "0 of 0 — 0%" reads as "you scored nothing". It means "nothing has been
+  // judged", which is what an unverified answer actually produces.
+  const never = { id: 't1', title: 'Conditionals', attempts: 0, correct: 0, mastery: 0 };
+  const doc = feedbackDocument({ verdict: 'partly_correct', feedback: 'saved', topic: never });
+  const progress = doc.components.find((c) => c.type === 'progress');
+  const detail = (progress?.items || []).map((i) => i.detail).join(' ');
+  check('an unjudged topic does not report a score', !/0 of 0/.test(detail), detail);
+  check('it says nothing is recorded yet', /none yet|nothing recorded/i.test(detail), detail);
+
+  const scored = { id: 't1', title: 'Conditionals', attempts: 4, correct: 3, mastery: 2 };
+  const doc2 = feedbackDocument({ verdict: 'correct', feedback: 'ok', topic: scored });
+  const p2 = doc2.components.find((c) => c.type === 'progress');
+  equal('a judged topic still reports its ratio', p2.items[0].detail, '3 of 4');
+  equal('and its percentage', p2.items[0].value, 75);
 }
 
 /* -------------------------------------------------------------------------- */

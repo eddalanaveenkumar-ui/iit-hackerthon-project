@@ -164,7 +164,10 @@ section('A missing interpreter is an environment fault, never a verdict');
   const graded = await gradeCodeAnswer({ question: q({ expected_output: '4' }), code: 'print(2 + 2)' });
   check('the verdict is not "incorrect"', graded.verdict !== 'incorrect', graded.verdict);
   check('it is "partly_correct" (recorded, not verified)', graded.verdict === 'partly_correct', graded.verdict);
-  check('the feedback explains why it was not verified', /not verified|no Python interpreter/i.test(graded.feedback), graded.feedback);
+  // About their answer, not about our machine.
+  check('the feedback says it was not marked', /could not be run here|cannot mark it/i.test(graded.feedback), graded.feedback);
+  check('the technical reason is kept out of the learner text', !/no Python interpreter/i.test(graded.feedback), graded.feedback);
+  check('but is preserved as a reason field', /no Python interpreter/i.test(String(graded.reason || '')), String(graded.reason || ''));
   check('the feedback does not say the answer was wrong', !/^not quite/i.test(graded.feedback));
 
   // A wrong answer on a broken host must also not be called wrong — we cannot
