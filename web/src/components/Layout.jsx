@@ -54,11 +54,11 @@ export default function Layout() {
     (location.pathname.startsWith('/app/admin') ? 'AI configuration' : null);
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
+    <div className={cx('bg-slate-50 dark:bg-slate-950', isFullHeight(location.pathname) ? 'h-dvh overflow-hidden' : 'min-h-screen')}>
       <Sidebar user={user} />
       <SidebarDrawer open={drawer} onClose={() => setDrawer(false)} user={user} />
 
-      <div className="flex min-h-screen flex-col lg:pl-64">
+      <div className={cx('flex flex-col lg:pl-64', isFullHeight(location.pathname) ? 'h-dvh overflow-hidden' : 'min-h-screen')}>
         <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-slate-50/85 backdrop-blur dark:border-slate-800/70 dark:bg-slate-950/85">
         <div className="mx-auto flex h-14 w-full max-w-4xl items-center gap-2 px-3 sm:px-4">
           <button
@@ -126,7 +126,19 @@ export default function Layout() {
         </div>
       </header>
 
-        <main className={cx('mx-auto w-full flex-1 px-3 sm:px-4', isChat(location.pathname) ? 'max-w-4xl py-3' : 'max-w-[1200px] py-5')}>
+        {/* The Tracs chat must not scroll the whole page: the composer has to
+            stay pinned to the bottom of the viewport while only the transcript
+            scrolls, which is what makes it feel like a chat app. That needs a
+            bounded height, so the shell becomes `h-dvh` and `main` takes the
+            remaining space with `min-h-0` (without it a flex child refuses to
+            shrink and the inner `overflow-y-auto` never engages). */}
+        <main
+          className={cx(
+            'mx-auto w-full flex-1 px-3 sm:px-4',
+            isChat(location.pathname) ? 'max-w-4xl py-3' : 'max-w-[1200px] py-5',
+            isFullHeight(location.pathname) && 'min-h-0',
+          )}
+        >
           <Outlet />
         </main>
       </div>
@@ -136,6 +148,17 @@ export default function Layout() {
 
 function isChat(pathname) {
   return pathname === '/app' || pathname === '/app/';
+}
+
+/**
+ * Routes that own the whole viewport and scroll internally.
+ *
+ * tracs is a chat: the transcript scrolls, the composer does not. Sticky would
+ * not do — the page scrolled behind it, which is exactly the complaint. Bounding
+ * the shell is what keeps the input where the user expects it.
+ */
+function isFullHeight(pathname) {
+  return pathname === '/app/tracs' || pathname.startsWith('/app/tracs/');
 }
 
 function MenuLink({ to, icon: Icon, label, onDone }) {

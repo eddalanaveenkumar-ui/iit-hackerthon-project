@@ -711,6 +711,11 @@ const actionsComponent = z.strictObject({
         tone: tone.optional(),
         target: z.enum(NAV_TARGETS).optional(),
         confirm: optShort,
+        // Which tracs command this button runs. It used to be inferred from
+        // `action`, and every `continue_lesson` fell through to `/test` — so a
+        // button labelled "/learn" asked a question. Carrying it explicitly (and
+        // allowing it through the schema) removes the guess.
+        command: z.enum(['test', 'learn']).optional(),
       }),
     )
     .min(1)

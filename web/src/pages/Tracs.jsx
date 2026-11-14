@@ -36,7 +36,7 @@ import {
 
 const COMMANDS = [
   { command: '/test', label: '/test', hint: 'One question at a time', icon: ClipboardCheck },
-  { command: '/learn', label: '/learn', hint: 'An explanation, then checks', icon: BookOpen },
+  { command: '/learn', label: '/learn', hint: 'An explanation, no question', icon: BookOpen },
 ];
 
 /**
@@ -234,8 +234,70 @@ function SessionList({ sessions, loading, onOpen, onDelete }) {
 
 /* -------------------------------------------------------------------------- */
 
-function ChatMessage({ entry, actions, onFollowUp, busy }) {
+/**
+ * Reveal a finished document progressively.
+ *
+ * The server answers in one piece, so a reply used to appear all at once after a
+ * silent wait. This is not token streaming — nothing is fetched twice — it simply
+ * uncovers what has already arrived, one component at a time, so the explanation
+ * reads as if it is being written. Cheap, and it cannot fail or stall.
+ *
+ * It reveals one component per tick. Documents are built so the first component
+ * is the substance (an explanation block or the verdict), with the connective
+ * text and action rows after it — so the reader gets the content first and the
+ * buttons last, which is the order that reads naturally.
+ */
+function useProgressiveDocument(document, { enabled, tick = 260, onStep } = {}) {
+  const total = document?.components?.length || 0;
+  const key = document?.response_id || 'none';
+  const [shown, setShown] = useState(() => (enabled ? Math.min(1, total) : total));
+  const stepRef = useRef(onStep);
+  stepRef.current = onStep;
+
+  useEffect(() => {
+    const count = document?.components?.length || 0;
+    if (!enabled || count === 0) {
+      setShown(count);
+      return undefined;
+    }
+    setShown(Math.min(1, count));
+    let current = Math.min(1, count);
+    const timer = setInterval(() => {
+      current += 1;
+      setShown(current);
+      if (current >= count) clearInterval(timer);
+      // The reply grows after `messages` settled, so the scroll effect that
+      // follows `messages` no longer covers it: without this the newest lines
+      // slide under the composer as they appear. Read through a ref so a new
+      // callback identity cannot restart the interval mid-reveal.
+      stepRef.current?.();
+    }, tick);
+    return () => clearInterval(timer);
+    // `key` identifies the response: a new one restarts the reveal.
+  }, [key, enabled, tick, total]);
+
+  if (!document) return null;
+  if (!enabled || shown >= total) return document;
+  return { ...document, components: (document.components || []).slice(0, shown) };
+}
+
+/** A blinking caret shown while a reply is still being uncovered. */
+function TypingCaret() {
+  return (
+    <span
+      aria-hidden
+      className="ml-0.5 inline-block h-3.5 w-[2px] translate-y-[2px] animate-pulse bg-slate-400 dark:bg-slate-500"
+    />
+  );
+}
+
+function ChatMessage({ entry, actions, onFollowUp, busy, animate, onRevealStep }) {
   const isUser = entry.role === 'user';
+  const revealed = useProgressiveDocument(entry.document, {
+    enabled: Boolean(animate && entry.role === 'assistant' && !entry.error),
+    onStep: onRevealStep,
+  });
+  const revealing = Boolean(revealed && entry.document && revealed.components.length < (entry.document.components || []).length);
 
   if (isUser) {
     return (
@@ -261,8 +323,11 @@ function ChatMessage({ entry, actions, onFollowUp, busy }) {
                 {entry.command}
               </p>
             ) : null}
-            {entry.document ? (
-              <DynamicRenderer document={entry.document} actions={actions} onFollowUp={onFollowUp} busy={busy} />
+            {revealed ? (
+              <>
+                <DynamicRenderer document={revealed} actions={actions} onFollowUp={onFollowUp} busy={busy} />
+                {revealing ? <p className="mt-1"><TypingCaret /></p> : null}
+              </>
             ) : null}
           </>
         )}
@@ -303,6 +368,11 @@ export default function Tracs() {
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const bottomRef = useRef(null);
+  // Cheap and dependency-free: scrolling on every reveal step keeps the tail in
+  // view while a reply unfolds, and does nothing once it has finished.
+  const followTail = useCallback(() => {
+    bottomRef.current?.scrollIntoView({ block: 'end' });
+  }, []);
 
   /* ------------------------------ sessions ------------------------------ */
 
@@ -394,6 +464,7 @@ export default function Tracs() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages]);
 
+
   /* ------------------------------- actions ------------------------------ */
 
   const send = useCallback(
@@ -451,7 +522,14 @@ export default function Tracs() {
         navigate,
         notify: (tone, message) => (tone === 'error' ? toast.error(message) : toast.info(message)),
         onContinue: async (metadata) => {
-          const command = metadata?.command === 'learn' ? 'learn' : 'test';
+          // Take the command the button actually names. This used to be
+          // `metadata?.command === 'learn' ? 'learn' : 'test'`, so any button that
+          // did not spell out "learn" — including the explanation's own
+          // "Ask a follow-up question" — silently ran `/test`.
+          const named = String(metadata?.command || '').toLowerCase();
+          const command = named === 'learn' || named === 'test'
+            ? named
+            : (session?.mode === 'learn' ? 'learn' : 'test');
           return send({ command, optimistic: `/${command}` });
         },
       }),
@@ -590,8 +668,18 @@ export default function Tracs() {
 
       <section className="flex min-h-0 flex-1 flex-col bg-slate-50 dark:bg-slate-950">
         <div className="flex-1 space-y-3 overflow-y-auto p-3 sm:p-4">
-          {messages.map((entry) => (
-            <ChatMessage key={entry.id} entry={entry} actions={actions} onFollowUp={onFollowUp} busy={busy} />
+          {messages.map((entry, index) => (
+            <ChatMessage
+              key={entry.id}
+              entry={entry}
+              actions={actions}
+              onFollowUp={onFollowUp}
+              busy={busy}
+              // Only the newest reply reveals: replays and scrolls must not
+              // re-type history the learner has already read.
+              animate={index === messages.length - 1}
+              onRevealStep={followTail}
+            />
           ))}
           <div ref={bottomRef} />
         </div>
@@ -614,27 +702,33 @@ export default function Tracs() {
             ))}
           </div>
 
-          <form onSubmit={onSend} className="flex items-end gap-2">
+          {/* One rounded field with a floating send button, the shape people
+              already know from ChatGPT. The whole row is the input: clicking
+              anywhere in it focuses the text. */}
+          <form
+            onSubmit={onSend}
+            className="flex items-end gap-2 rounded-[26px] border border-slate-200 bg-white p-1.5 pl-4 shadow-sm transition-colors focus-within:border-brand-400 focus-within:ring-2 focus-within:ring-brand-500/15 dark:border-slate-700 dark:bg-slate-950"
+          >
             <label htmlFor="tracs-input" className="sr-only">Command</label>
             <input
               id="tracs-input"
               value={input}
               onChange={(event) => setInput(event.target.value)}
-              placeholder="/test or /learn"
+              placeholder="Ask with /test or /learn"
               disabled={busy}
               autoComplete="off"
-              className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              className="min-w-0 flex-1 bg-transparent py-2.5 text-sm text-slate-800 outline-none placeholder:text-slate-400 disabled:opacity-60 dark:text-slate-100 dark:placeholder:text-slate-500"
             />
             <button
               type="submit"
               disabled={busy || !input.trim()}
-              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-600 text-white transition-colors hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-600 text-white transition-all hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400 dark:disabled:bg-slate-800 dark:disabled:text-slate-600"
               aria-label="Send command"
             >
               {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Send className="h-4 w-4" aria-hidden />}
             </button>
           </form>
-          <p className="mt-1.5 text-[11px] text-slate-400 dark:text-slate-500">
+          <p className="mt-2 text-center text-[11px] text-slate-400 dark:text-slate-500">
             Only <span className="font-mono">/test</span> and <span className="font-mono">/learn</span> are available here.
           </p>
         </div>

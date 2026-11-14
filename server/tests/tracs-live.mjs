@@ -97,25 +97,45 @@ const forms2 = (ans.json?.document?.components || []).filter(c => c.type === 'qu
 ok('the next question is also exactly one form', forms2.length <= 1);
 ok('and it has one question', !forms2[0] || forms2[0].questions.length === 1);
 
-// 5. /learn explains and then checks
+// 5. /learn explains, and asks nothing
 const l1 = await post(`/api/tracs/${sessionId}/turn`, { command: 'learn' }, token);
 ok('/learn succeeds', l1.status === 200, `${l1.status} ${l1.text.slice(0,200)}`);
 const comps = l1.json?.document?.components || [];
 ok('/learn returns renderings', comps.length >= 2, `got ${comps.length}`);
-const checks = comps.filter(c => c.type === 'question_form');
-ok('/learn asks checking questions', checks.length === 1);
-ok('with exactly one check on screen', checks[0]?.questions?.length === 1);
 ok('the explanation is not empty', comps.some(c => ['learning','text','code_editor','diagram','math','card_group'].includes(c.type)), JSON.stringify(comps.map(c=>c.type)));
+
+// /learn is explanation-only. It used to end with two checking questions, which
+// made it feel like /test with a preamble: someone who only wanted to read had
+// to answer a graded question first.
+ok('/learn asks no question at all', comps.every(c => c.type !== 'question_form'), JSON.stringify(comps.map(c=>c.type)));
+ok('/learn reports no pending checks', !l1.json?.session?.mode || l1.json.session.mode === 'learn');
+
+{
+  // The only way forward is one button, and it names the command it runs.
+  const rows = comps.filter(c => c.type === 'actions');
+  ok('/learn offers exactly one action row', rows.length === 1, `got ${rows.length}`);
+  const buttons = rows[0]?.actions || [];
+  ok('/learn offers exactly one button', buttons.length === 1, JSON.stringify(buttons.map(b=>b.label)));
+  ok('and that button is /test', buttons[0]?.command === 'test', JSON.stringify(buttons[0]));
+  ok('labelled with the command', /\/test/.test(buttons[0]?.label || ''), buttons[0]?.label);
+}
+
+// 6. /test is what asks a question
+const tLearn = await post(`/api/tracs/${sessionId}/turn`, { command: 'test' }, token);
+ok('/test succeeds', tLearn.status === 200, `${tLearn.status} ${tLearn.text.slice(0,200)}`);
+const checks = (tLearn.json?.document?.components || []).filter(c => c.type === 'question_form');
+ok('/test asks exactly one question', checks.length === 1, JSON.stringify((tLearn.json?.document?.components||[]).map(c=>c.type)));
+ok('with exactly one question on screen', checks[0]?.questions?.length === 1);
 
 // 6. a checking question is answerable
 const cq = checks[0]?.questions?.[0];
 const checkAns = await post(`/api/tracs/${sessionId}/turn`, {
-  command: 'learn',
+  command: 'test',
   question_id: cq.id,
   answer: cq.type === 'radio' ? (cq.options?.[0] || 'A') : 'A variable stores a value.',
 }, token);
 ok('a checking answer is accepted', checkAns.status === 200, `${checkAns.status} ${checkAns.text.slice(0,200)}`);
-ok('the loop reports what happened', ['check','understood','reteach'].includes(checkAns.json?.outcome), checkAns.json?.outcome);
+ok('the loop reports what happened', ['check','understood','reteach','first_exposure'].includes(checkAns.json?.outcome), checkAns.json?.outcome);
 ok('and stays one question at a time', (checkAns.json?.document?.components || []).filter(c=>c.type==='question_form').every(f=>f.questions.length===1));
 
 // 6b. missing every check must repeat the explanation, not repeat the question
@@ -125,12 +145,13 @@ ok('and stays one question at a time', (checkAns.json?.document?.components || [
     title: 'Reteach',
   }, token);
   const id2 = up2.json?.session?.id;
-  const teach = await post(`/api/tracs/${id2}/turn`, { command: 'learn' }, token);
+  const teach = await post(`/api/tracs/${id2}/turn`, { command: 'test' }, token);
   const firstForm = (teach.json?.document?.components || []).filter((c) => c.type === 'question_form')[0];
   const asked = new Set();
   let last = null;
 
   // Answer every check wrongly, one at a time, until the loop stops asking.
+  // This drives /test: /learn no longer opens a checking round at all.
   for (let turn = 0; turn < 4; turn += 1) {
     // `last` is the HTTP wrapper ({ status, json }), so the document hangs off
     // `last.json`. Reading `last.document` silently fell through to the *first*
@@ -140,14 +161,14 @@ ok('and stays one question at a time', (checkAns.json?.document?.components || [
     const question = form.questions[0];
     if (!question || asked.has(`${turn}:${question.id}`)) break;
     asked.add(`${turn}:${question.id}`);
-    last = await post(`/api/tracs/${id2}/turn`, { command: 'learn', question_id: question.id, answer: 'deliberately wrong' }, token);
+    last = await post(`/api/tracs/${id2}/turn`, { command: 'test', question_id: question.id, answer: 'deliberately wrong' }, token);
     if (last.json?.outcome === 'reteach') break;
   }
 
-  ok('missing every check produces a re-teach', last?.json?.outcome === 'reteach', last?.json?.outcome);
+  ok('missing every check produces a re-teach', ['reteach', 'needs_teaching'].includes(last?.json?.outcome), last?.json?.outcome);
   const reteachTypes = (last?.json?.document?.components || []).map((c) => c.type);
   ok('the re-teach carries a fresh explanation', reteachTypes.includes('learning') || reteachTypes.includes('text'), JSON.stringify(reteachTypes));
-  ok('the re-teach says why', (last?.json?.document?.components || []).some((c) => c.type === 'text' && /not quite there|again|different way/i.test(c.content || '')));
+  ok('the re-teach says why', (last?.json?.document?.components || []).some((c) => c.type === 'text' && /not quite there|working definition|again|different way/i.test(c.content || '')));
   const reteachForms = (last?.json?.document?.components || []).filter((c) => c.type === 'question_form');
   ok('and re-checks with exactly one question', reteachForms.length === 1 && reteachForms[0].questions.length === 1);
   await fetch(`${BASE}/api/tracs/${id2}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });

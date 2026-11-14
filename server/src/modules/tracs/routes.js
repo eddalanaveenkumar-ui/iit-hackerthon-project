@@ -23,6 +23,7 @@ import {
   gradeAnswer,
   feedbackDocument,
   oneQuestionForm,
+  explainMistake,
   assessUnderstanding,
   gapCategory,
   makeDocument,
@@ -372,9 +373,19 @@ router.post(
           });
         }
 
+        // The answered question is still in hand here, which is the only place
+        // the learner's actual choice and the question's own explanation can be
+        // combined into a real account of the mistake.
+        const mistake = explainMistake({
+          question: session.openQuestion?.question,
+          chosen: data.answer,
+          verdict: graded.verdict,
+        });
+
         const document = feedbackDocument({
           verdict: graded.verdict,
           feedback: graded.feedback,
+          mistake: mistake?.text || null,
           topic: topic || next.topic,
           stats: session.stats,
           nextQuestion: nextForm,
@@ -593,35 +604,42 @@ router.post(
     // authored from the topic instead — which is what `authorChecks` falls back
     // to when it is not given a document, and it still produces answerable
     // questions about the topic just taught.
-    const [explanation, checks] = await Promise.all([
-      authorExplanation({
-        topic: target,
-        syllabusExcerpt: excerptFor(session, target),
-        userId: req.userId,
-        reTeach: session.teachTopicId === target.id,
-      }),
-      authorChecks({
-        topic: target,
-        explanation: null,
-        count: CHECK_COUNT,
-        userId: req.userId,
-        language: languageFor(`${session.syllabusText || ''} ${target.title}`),
-      }),
-    ]);
+    // `/learn` explains, and stops there.
+    //
+    // It used to run the two checking questions as well, in parallel with the
+    // explanation. That made /learn feel like /test with a preamble: it always
+    // ended in a graded question, so a learner who only wanted to read had to
+    // answer one anyway. Now the floor is the explanation plus one way forward —
+    // a single `/test` action — and nothing is asked until they choose it.
+    const explanation = await authorExplanation({
+      topic: target,
+      syllabusExcerpt: excerptFor(session, target),
+      userId: req.userId,
+      reTeach: session.teachTopicId === target.id,
+    });
 
     session.mode = 'learn';
     session.teachTopicId = target.id;
     session.lastExplanation = { components: (explanation.document.components || []).map((c) => c.type), at: now.toISOString() };
-    session.pendingChecks = { topicId: target.id, questions: checks, results: [], startedAt: now.toISOString() };
+    // No checks are pending: /learn no longer opens a checking round.
+    session.pendingChecks = null;
     await saveSession(session);
 
     res.json({
       command: 'learn',
       outcome: 'explained',
+      // Exactly one way forward. The explanation arrives with its own action row
+      // ("ask a follow-up", "practise", "assessment") which belongs to the tutor
+      // flow, not here: in tracs the only two commands are /test and /learn, and
+      // after an explanation the useful next move is a question.
       document: mergeDocuments(
-        explanation.document,
-        [say('Before we move on — two quick checks that you actually followed that.')],
-        [oneQuestionForm({ question: checks[0], topic: target, index: 1, total: checks.length, sessionId: String(session._id) })],
+        dropComponents(explanation.document, (component) => component.type === 'actions'),
+        [{
+          id: `next_${Date.now().toString(36)}`,
+          type: 'actions',
+          title: 'Ready to check?',
+          actions: [{ id: 'go_test', label: 'Try a question (/test)', action: 'continue_lesson', command: 'test', tone: 'brand' }],
+        }],
       ),
       session: sessionView(session),
       source: explanation.source,
@@ -641,6 +659,15 @@ function excerptFor(session, topic) {
   const index = text.toLowerCase().indexOf(title.toLowerCase());
   if (index === -1) return `${topic.summary || ''}\n\n${text.slice(0, 1500)}`;
   return text.slice(Math.max(0, index - 200), index + 2500);
+}
+
+/** A copy of a document without the components matching `predicate`. */
+function dropComponents(document, predicate) {
+  if (!document) return document;
+  return {
+    ...document,
+    components: (document.components || []).filter((component) => !predicate(component)),
+  };
 }
 
 /** Concatenate documents into one, repairing each part as it goes. */

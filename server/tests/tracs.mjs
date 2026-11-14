@@ -31,6 +31,7 @@ import {
   oneQuestionForm,
   authorChecks,
   assessUnderstanding,
+  explainMistake,
   gapCategory,
   localExplanation,
   feedbackDocument,
@@ -832,6 +833,68 @@ section('a question never mixes languages or miscounts itself');
   }
   const [andTopic] = extractTopics('## Variables and Primitive Types\nsome body.');
   equal('small words stay lowercase', andTopic?.title, 'Variables and Primitive Types');
+}
+
+/* -------------------------------------------------------------------------- */
+/* a miss is explained, not just marked wrong                                 */
+/* -------------------------------------------------------------------------- */
+
+section('a wrong answer says what went wrong and shows an example');
+
+{
+  const question = {
+    id: 'q1',
+    type: 'radio',
+    question: 'What does 7 // 2 evaluate to?',
+    options: ['3.5', '3', '4', 'Raises ZeroDivisionError'],
+    correct_index: 1,
+    explanation: '// floors toward negative infinity, so 7 // 2 is 3.',
+    code: 'print(7 // 2)',
+    print: '3',
+  };
+
+  const miss = explainMistake({ question, chosen: '3.5' });
+  check('a miss produces an explanation', Boolean(miss?.text));
+  check('it names the option the learner chose', /3\.5/.test(miss.text), miss.text);
+  check('it names the correct answer', /The correct answer is \*\*3\*\*/.test(miss.text));
+  check('it gives the rule', /floors toward negative infinity/.test(miss.text));
+  check('it shows a concrete example', /print\(7 \/\/ 2\)/.test(miss.text), miss.text);
+  check('and the example has its result', /→\s*3/.test(miss.text), miss.text);
+  check('the explanation is substantial', miss.text.length > 120, String(miss.text.length));
+
+  // A correct answer has no mistake to explain.
+  equal('a correct answer explains nothing', explainMistake({ question, chosen: '3', verdict: 'correct' }), null);
+
+  // Nothing specific to say: fall back rather than invent.
+  const bare = explainMistake({ question: { type: 'radio', options: ['a', 'b'] }, chosen: 'a' });
+  equal('with no answer or rule there is nothing to say', bare, null);
+
+  // The feedback document prefers the long form over the one-liner.
+  const doc = feedbackDocument({
+    verdict: 'incorrect',
+    feedback: 'The answer is: 3.',
+    mistake: miss.text,
+    topic: null,
+  });
+  const text = doc.components.find((c) => c.type === 'text')?.content || '';
+  check('the document leads with Not quite', /^\*\*Not quite\.\*\*/.test(text), text.slice(0, 40));
+  check('and carries the worked explanation', /\/\/ floors toward negative infinity/.test(text));
+  check('not just the one-line answer', text.length > 120, String(text.length));
+
+  const short = feedbackDocument({ verdict: 'incorrect', feedback: 'The answer is: 3.', topic: null });
+  check('without a mistake it still says the answer', /The answer is: 3/.test(short.components[0].content));
+}
+
+{
+  // The hand-off into the next question is explicit, and differs by verdict.
+  const nextForm = oneQuestionForm({ question: localQuestion({ title: 'Operators', summary: '', keywords: [] }, { attempt: 1 }), topic: { title: 'Operators' }, index: 1, total: null, sessionId: 's' });
+  const wrongDoc = feedbackDocument({ verdict: 'incorrect', feedback: 'x', topic: null, nextQuestion: nextForm });
+  const wrongTexts = wrongDoc.components.filter((c) => c.type === 'text').map((c) => c.content).join(' ');
+  check('a miss leads into a question aimed at the mistake', /targets exactly the step that went wrong/.test(wrongTexts), wrongTexts.slice(-120));
+
+  const rightDoc = feedbackDocument({ verdict: 'correct', feedback: 'x', topic: null, nextQuestion: nextForm });
+  const rightTexts = rightDoc.components.filter((c) => c.type === 'text').map((c) => c.content).join(' ');
+  check('a correct answer extends instead', /one step further/.test(rightTexts), rightTexts.slice(-120));
 }
 
 /* -------------------------------------------------------------------------- */

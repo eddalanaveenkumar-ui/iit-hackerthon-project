@@ -203,8 +203,11 @@ export function createDynamicActions({ navigate, notify, onProgress, onFollowUp,
       return result;
     },
     navigate: (target) => navigate(target),
-    continueLesson: async () => {
-      if (onContinue) return onContinue();
+    continueLesson: async (action) => {
+      // Pass the action through. It used to be dropped, so the caller never saw
+      // the button's `command` and every continuation fell back to `/test` —
+      // which is why a "/learn" button could start a test.
+      if (onContinue) return onContinue(action || null);
       return { ok: false, reason: 'Continuation is not available here.' };
     },
     startAssessment: () => navigate('/app/assessments'),
