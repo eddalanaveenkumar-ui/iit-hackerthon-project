@@ -36,6 +36,7 @@ import {
   feedbackDocument,
   CHECK_COUNT,
 } from '../src/modules/tracs/engine.js';
+import { factsFor, languageFor } from '../src/modules/tracs/question-bank.js';
 import { parseUiDocument } from '../src/modules/ai/ui/protocol.js';
 
 let passed = 0;
@@ -766,6 +767,71 @@ section('checks are distinct and every one must be answered');
   const topic = { title: 'Unknown Topic With No Facts', summary: '', keywords: [] };
   const checks = await authorChecks({ topic, explanation: null, count: 3, userId: '5f0000000000000000000001' });
   equal('no two checks share an id', new Set(checks.map((c) => c.id)).size, checks.length);
+}
+
+/* -------------------------------------------------------------------------- */
+/* the question matches the syllabus's language, and the count is honest      */
+/* -------------------------------------------------------------------------- */
+
+section('a question never mixes languages or miscounts itself');
+
+{
+  // A Java syllabus was being asked "A variable is assigned 7 and later assigned
+  // 7.5. What happens in Python?" — a fine question for the wrong learner.
+  const javaTopic = { title: 'Variables and Primitive Types', summary: '', keywords: [] };
+  const pyTopic = { title: 'Variables and Data Types', summary: '', keywords: [] };
+
+  equal('a Java syllabus is detected', languageFor('Section A — Java Programming'), 'java');
+  equal('a Python syllabus is detected', languageFor('Section A — Python Programming'), 'python');
+
+  const javaQ = localQuestion(javaTopic, { attempt: 1, language: 'java' });
+  const pyQ = localQuestion(pyTopic, { attempt: 1, language: 'python' });
+
+  check('the Java question does not mention Python', !/python/i.test(String(javaQ.question)), javaQ.question);
+  check('the Java question names Java', /java/i.test(String(javaQ.question)), javaQ.question);
+  check('the Java question is answerable', Array.isArray(javaQ.options) && javaQ.options.length === 4);
+  check('the Python question still mentions Python', /python/i.test(String(pyQ.question)), pyQ.question);
+
+  // The question that prompted this: mixed-language pseudo-syntax.
+  const all = [...factsFor(javaTopic, { language: 'java' }), ...factsFor(pyTopic, { language: 'python' })];
+  const mixed = all.filter((f) => /\bx = 10;|x = 'hello'/.test(String(f.ask)));
+  equal('no curated question uses invented pseudo-syntax', mixed.length, 0);
+
+  // Every curated fact keeps exactly one defensible answer.
+  for (const fact of all) {
+    equal(`"${fact.label}" options are distinct`, new Set([fact.answer, ...fact.wrong]).size, fact.wrong.length + 1);
+    check(`"${fact.label}" explains why`, String(fact.explain || '').length > 20);
+  }
+}
+
+{
+  // "question 1 of 14" was counting topics. /test asks one question at a time
+  // and picks the next from the answer, so it has no fixed total to count to.
+  const q = { id: 'q1', type: 'radio', question: 'Which is it?', options: ['a', 'b'] };
+
+  const open = oneQuestionForm({ question: q, topic: { title: 'Variables' }, index: 1, total: null, sessionId: 's1' });
+  equal('with no fixed total the label is just the topic', open.title, 'Variables');
+  check('and it never claims a count it cannot know', !/of \d+/.test(open.title), open.title);
+
+  const counted = oneQuestionForm({ question: q, topic: { title: 'Variables' }, index: 1, total: 2, sessionId: 's1' });
+  equal('a real count is still shown', counted.title, 'Variables — question 1 of 2');
+}
+
+{
+  // A container heading is not a concept. Left in as a topic it produced the
+  // stem `You meet "Section A — Java Programming" for the first time`.
+  const java = 'Section A — Java Programming\n## Variables and Primitive Types\nint, long.\n## Loops and Iteration\nfor, while.';
+  const titles = extractTopics(java).map((t) => t.title);
+  check('a "Section" line is not treated as a topic', !titles.some((t) => /^section\b/i.test(t)), titles.join(' | '));
+  equal('the real topics survive', titles.length >= 2, true);
+
+  // Acronyms were being destroyed by title-casing: TCP/IP -> Tcp/Ip, SQL -> Sql.
+  for (const [input, expected] of [['TCP/IP and HTTP', 'TCP/IP and HTTP'], ['SQL JOIN Types', 'SQL JOIN Types']]) {
+    const [topic] = extractTopics(`## ${input}\nsome body text here.`);
+    equal(`"${input}" keeps its capitals`, topic?.title, expected);
+  }
+  const [andTopic] = extractTopics('## Variables and Primitive Types\nsome body.');
+  equal('small words stay lowercase', andTopic?.title, 'Variables and Primitive Types');
 }
 
 /* -------------------------------------------------------------------------- */

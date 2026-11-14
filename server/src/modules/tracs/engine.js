@@ -75,7 +75,12 @@ export function oneQuestionForm({ question, topic, index, total, sessionId }) {
   return {
     id: `form_${sessionId || 's'}_${id}`.slice(0, 80),
     type: 'question_form',
-    title: topic ? `${topic.title} — question ${index} of ${total}` : `Question ${index} of ${total}`,
+    // Only claim "of N" when N is a real, fixed count. `/test` chooses the next
+    // question from the answer just given, so it has no fixed length; printing
+    // "question 1 of 14" there was counting topics, not questions.
+    title: topic
+      ? `${topic.title}${Number.isFinite(Number(total)) && Number(total) > 0 ? ` — question ${index} of ${total}` : ''}`
+      : `Question ${Number.isFinite(Number(total)) && Number(total) > 0 ? `${index} of ${total}` : index}`,
     description: question.question,
     questions: [
       {
@@ -177,8 +182,8 @@ function codeStub(topic) {
  * the first option and whose distractors are absurdities ("It has no practical
  * use"). That is not a question, it is a coin that always lands heads.
  */
-function multipleChoice(topic, { attempt = 1, summary = '' } = {}) {
-  const [fact] = factsFor(topic);
+function multipleChoice(topic, { attempt = 1, summary = '', language = null } = {}) {
+  const [fact] = factsFor(topic, { language });
 
   if (fact) {
     const options = shuffleStable([fact.answer, ...fact.wrong].slice(0, 4), topic?.title || '');
@@ -254,13 +259,13 @@ function shuffleStable(items, seed) {
 }
 
 /** The deterministic question, used when the model is unavailable or malformed. */
-export function localQuestion(topic, { attempt = 1, subject = '' } = {}) {
+export function localQuestion(topic, { attempt = 1, subject = '', language = null } = {}) {
   const type = pickQuestionType(topic, { attempt, subject });
   const summary = String(topic?.summary || '').slice(0, 240);
   const base = { id: `q${Date.now().toString(36)}`, type, hint: undefined };
 
   if (type === 'radio') {
-    const mc = multipleChoice(topic, { attempt, summary });
+    const mc = multipleChoice(topic, { attempt, summary, language });
     return { ...base, ...mc };
   }
   if (type === 'number') {
@@ -311,10 +316,11 @@ export async function authorQuestion({
   attempt = 1,
   previous = null,
   subject = '',
+  language = null,
   userId,
   conversationId,
 }) {
-  const fallback = localQuestion(topic, { attempt, subject });
+  const fallback = localQuestion(topic, { attempt, subject, language });
 
   const previousBlock = previous
     ? `THE PREVIOUS ANSWER: verdict "${previous.verdict}".
@@ -337,6 +343,8 @@ Rules:
 - For "code_input" you MUST give both a "language" and an "expected_output": the exact stdout the program prints. Write the question so it has one provable result — print a computed value, not "demonstrate X". A code question without an expected output cannot be graded and will be discarded.
 - Do not reveal the answer in the question.
 - Keep the question under 300 characters.
+- STAY IN ONE LANGUAGE. ${language ? `This syllabus is ${LANGUAGE_NAMES[language] || language}; write every code sample in ${LANGUAGE_NAMES[language] || language} and use its real syntax.` : 'Use one language consistently.'} Never mix two languages in the same snippet, and never ask about another language's behaviour — "what happens in Python?" is wrong on a Java syllabus.
+- A code sample must be something the learner could actually type and run. Do not invent syntax that would not execute: \`x = 10; x = 'hello'; x = 3.14\` is valid in neither Python nor Java. If you cannot write it correctly, ask in prose instead.
 
 Return ONLY JSON:
 {"question":"…","type":"radio","options":["…"],"correct_index":0,"expected_output":"…","language":"python","hint":"a nudge that does not give it away","tests":[]}`,
@@ -646,6 +654,9 @@ export function feedbackDocument({
 /** How many checking questions must be answered before the loop closes. */
 export const CHECK_COUNT = 2;
 
+/** How to name a language in a prompt. Mirrors `languageFor`. */
+const LANGUAGE_NAMES = { python: 'Python', javascript: 'JavaScript', java: 'Java', sql: 'SQL' };
+
 /**
  * Ask for an explanation *as a UI document*.
  *
@@ -772,7 +783,7 @@ export function localExplanation(topic, { reTeach = false } = {}) {
  * are generated from the explanation itself so they test the thing that was
  * just shown rather than something adjacent to it.
  */
-export async function authorChecks({ topic, explanation, count = CHECK_COUNT, userId }) {
+export async function authorChecks({ topic, explanation, count = CHECK_COUNT, userId, language = null }) {
   // What the checks should test. When the explanation is supplied it is the best
   // source — the checks then probe what was actually shown. When it is not
   // (because the two calls run in parallel to stay inside a gateway timeout) the
@@ -801,6 +812,7 @@ export async function authorChecks({ topic, explanation, count = CHECK_COUNT, us
 
 Write ${count} short questions that test understanding — not recall of wording.
 Each must be answerable from the explanation, and at least one must ask the learner to apply the idea rather than define it.
+${language ? `Write any code in ${LANGUAGE_NAMES[language] || language}, using that language's real syntax. Never mix two languages in one snippet.` : 'Use one language consistently in any code you write.'}
 Return ONLY JSON: {"questions":[{"question":"…","type":"radio","options":["…"],"correct_index":0}]}`,
       },
       {
@@ -821,7 +833,7 @@ Return ONLY JSON: {"questions":[{"question":"…","type":"radio","options":["…
   // back to the *same object* — same id. Two checks sharing one id is poison:
   // answering one marks both attempted, so the round ends after a single answer
   // (and the "question 1 of 2" label becomes a lie).
-  const questions = raw.slice(0, count).map((q) => normaliseQuestion(q, localQuestion(topic, { attempt: 1 }), topic));
+  const questions = raw.slice(0, count).map((q) => normaliseQuestion(q, localQuestion(topic, { attempt: 1, language }), topic));
 
   // A deterministic fallback that still tests understanding: restate the idea,
   // then apply it. It is graded by the prose evaluator, so "I don't know" is

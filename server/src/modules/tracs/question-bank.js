@@ -41,6 +41,7 @@
 export const FACTS = [
   /* ---- Python / Java fundamentals ------------------------------------- */
   {
+    lang: 'python',
     match: /variables? (and|&) data ?types?|data ?types?|primitive types?/,
     label: 'Variables and data types',
     ask: 'A variable is assigned 7 and later assigned 7.5. What happens in Python?',
@@ -55,6 +56,7 @@ export const FACTS = [
     print: 'float',
   },
   {
+    lang: 'python',
     match: /type casting|type conversion|casting|coercion/,
     label: 'Type casting',
     ask: 'In Python, what does `int("12.7")` do?',
@@ -69,6 +71,7 @@ export const FACTS = [
     print: '12',
   },
   {
+    lang: 'python',
     match: /operators? (and|&) expressions?|arithmetic operators?|expressions?/,
     label: 'Operators and expressions',
     ask: 'What does `7 // 2` evaluate to in Python 3?',
@@ -79,6 +82,7 @@ export const FACTS = [
     print: '3',
   },
   {
+    lang: 'python',
     match: /input (and|&) output|print(ing)?|console output|io\b/,
     label: 'Input and output',
     ask: 'What is the type of the value returned by `input()` in Python?',
@@ -91,6 +95,7 @@ export const FACTS = [
 
   /* ---- control flow ---------------------------------------------------- */
   {
+    lang: 'python',
     match: /conditionals?|if statements?|branching|decision/,
     label: 'Conditionals',
     ask: 'What does this print?\n`x = 0` then `if x: print("yes") else: print("no")`',
@@ -131,6 +136,7 @@ export const FACTS = [
 
   /* ---- functions ------------------------------------------------------- */
   {
+    lang: 'python',
     match: /defining (functions|methods)|functions?|methods?/,
     label: 'Defining functions',
     ask: 'A function has no `return` statement. What does it return?',
@@ -151,6 +157,7 @@ export const FACTS = [
     print: '5',
   },
   {
+    lang: 'python',
     match: /method overloading|overloading/,
     label: 'Method overloading',
     ask: 'Java allows `add(int, int)` and `add(int, int, int)` as overloads. Can Python do the same?',
@@ -179,6 +186,7 @@ export const FACTS = [
 
   /* ---- data structures ------------------------------------------------- */
   {
+    lang: 'python',
     match: /lists? (and|&) tuples?|lists?|tuples?/,
     label: 'Lists and tuples',
     ask: 'What is the difference between a list and a tuple in Python?',
@@ -203,6 +211,7 @@ export const FACTS = [
     print: 'absent',
   },
   {
+    lang: 'python',
     match: /arrays?|indexing|slicing/,
     label: 'Arrays and indexing',
     ask: 'In Python, what does `[10, 20, 30, 40][1:3]` return?',
@@ -213,6 +222,7 @@ export const FACTS = [
     print: '2',
   },
   {
+    lang: 'python',
     match: /strings? (and|&) slicing|string handling|string methods/,
     label: 'Strings and slicing',
     ask: 'Are Python strings mutable — can you assign to `s[0]`?',
@@ -294,6 +304,117 @@ export const FACTS = [
     code: 'with open("f.txt", "w") as f:\n    f.write("hi")\nwith open("f.txt") as f:\n    print(f.read())',
     print: 'hi',
   },
+  /* ---- Java ----------------------------------------------------------- */
+  {
+    lang: 'java',
+    match: /variables? (and|&) (data ?types?|primitive types?)|data ?types?|primitive types?/,
+    label: 'Variables and primitive types',
+    ask: 'Java has `int total = 7;` and later `total = 7.5;`. What happens?',
+    answer: 'It does not compile — 7.5 is a double and does not fit in an int without a cast',
+    wrong: [
+      'total quietly becomes the double 7.5',
+      'total keeps the value 7 and the assignment is ignored',
+      'It compiles, but 7.5 is rounded to 8 at run time',
+    ],
+    explain: 'Java is statically typed: the variable has one fixed type. Storing a double in an int needs an explicit cast, `total = (int) 7.5;`, which truncates to 7.',
+  },
+  {
+    lang: 'java',
+    match: /type casting|type conversion|casting|coercion/,
+    label: 'Type casting',
+    ask: 'In Java, what does `(int) 3.99` evaluate to?',
+    answer: '3 — the cast truncates towards zero, it does not round',
+    wrong: [
+      '4 — it rounds to the nearest integer',
+      '3.99 — the cast has no effect on a double',
+      'It throws a ClassCastException',
+    ],
+    explain: 'A narrowing primitive cast discards the fractional part. Use `Math.round(3.99)` if you want 4.',
+    code: 'System.out.println("ok")',
+    print: 'ok',
+  },
+  {
+    lang: 'java',
+    match: /operators? (and|&) expressions?|arithmetic operators?|expressions?/,
+    label: 'Operators and expressions',
+    ask: 'In Java, what is the value of `7 / 2` when both operands are `int`?',
+    answer: '3 — integer division discards the remainder',
+    wrong: ['3.5 — division always produces a decimal', '4 — it rounds to the nearest integer', 'It throws ArithmeticException'],
+    explain: 'Both operands are int, so the result is int and the remainder is dropped. Use `7 / 2.0` to get 3.5.',
+    code: 'System.out.println("ok")',
+    print: 'ok',
+  },
+  {
+    lang: 'java',
+    match: /conditionals?|if ?else|decision making|branching/,
+    label: 'Conditionals',
+    ask: 'In Java, which expression is a compile error inside `if ( ... )`?',
+    answer: '`if (count = 0)` — an assignment produces an int, not a boolean',
+    wrong: [
+      '`if (count == 0)` — comparing two ints is fine',
+      '`if (name.equals("x"))` — calling a method is fine',
+      '`if (count > 0)` — comparing two ints is fine',
+    ],
+    explain: 'Java requires a boolean condition. `=` assigns and yields an int, so it does not compile — which is exactly what stops the classic `if (x = y)` bug that C allows.',
+  },
+  {
+    lang: 'java',
+    match: /loops? (and|&) iteration|for loop|while loop|iteration/,
+    label: 'Loops and iteration',
+    ask: 'What does `for (int i = 0; i < 3; i++)` print for `i` inside the body?',
+    answer: '0, 1, 2 — the condition is checked before each pass',
+    wrong: ['1, 2, 3', '0, 1, 2, 3', '1, 2'],
+    explain: '`i` starts at 0 and the loop runs while `i < 3`, so the body sees 0, 1, 2. When `i` reaches 3 the condition fails and the body never runs again.',
+  },
+  {
+    lang: 'java',
+    match: /defining functions|methods?|functions?/,
+    label: 'Defining methods',
+    ask: 'In Java, what does a method with return type `void` mean?',
+    answer: 'It returns nothing to the caller — the return type is void, not a value',
+    wrong: [
+      'It returns null by default',
+      'It returns the last expression evaluated',
+      'It cannot take any parameters',
+    ],
+    explain: '`void` states there is no return value, so `return;` is allowed but `return x;` is a compile error. It says nothing about parameters.',
+  },
+  {
+    lang: 'java',
+    match: /arrays? (and|&) indexing|arrays?|indexing/,
+    label: 'Arrays and indexing',
+    ask: 'In Java, what happens on `int[] a = new int[3]; a[3] = 1;`?',
+    answer: 'ArrayIndexOutOfBoundsException at run time — valid indices are 0, 1, 2',
+    wrong: [
+      'The array grows to four elements',
+      'The assignment is silently ignored',
+      'A compile error — the index is checked by the compiler',
+    ],
+    explain: 'A Java array has a fixed length of 3, so the last valid index is 2. Index bounds are checked at run time, not compile time.',
+  },
+  {
+    lang: 'java',
+    match: /strings? (and|&) slicing|string handling|string methods/,
+    label: 'Strings and slicing',
+    ask: 'In Java, what does `"hello".substring(1, 3)` return?',
+    answer: '"el" — the end index is excluded',
+    wrong: ['"ell"', '"he"', '"ello"'],
+    explain: '`substring(begin, end)` takes characters from `begin` up to but not including `end`, so indices 1 and 2 — "el".',
+  },
+  {
+    lang: 'java',
+    match: /classes? (and|&) objects?|object oriented|oop/,
+    label: 'Classes and objects',
+    ask: 'In Java, what is the difference between `==` and `.equals()` on two String objects?',
+    answer: '`==` compares references, `.equals()` compares the characters',
+    wrong: [
+      'They behave identically for Strings because strings are interned',
+      '`==` compares characters and `.equals()` compares references',
+      '`.equals()` only works on numbers',
+    ],
+    explain: 'Strings are objects, so `==` asks "same object?" while `.equals()` asks "same characters?". Two equal strings built at run time are different objects.',
+  },
+
 ];
 
 /**
@@ -304,12 +425,22 @@ export const FACTS = [
  * phrases are tried before generic ones — hence `FACTS` is ordered above from
  * specific to general within each group.
  *
+ * `language` filters out questions written for another language. This matters:
+ * a Java syllabus that mentions "variables and data types" was being asked
+ * "A variable is assigned 7 and later assigned 7.5. What happens in Python?" —
+ * the question is fine, the question *for that learner* is not. Anything not
+ * tagged is language-neutral (inheritance, exceptions, files) and always applies.
+ *
  * @returns {Fact[]}
  */
-export function factsFor(topic) {
+export function factsFor(topic, { language = null } = {}) {
   const text = `${topic?.title || ''}`.toLowerCase();
   if (!text) return [];
-  return FACTS.filter((fact) => fact.match.test(text));
+  return FACTS.filter((fact) => {
+    if (!fact.match.test(text)) return false;
+    if (!fact.lang || !language) return true;
+    return fact.lang === language;
+  });
 }
 
 /**
