@@ -518,6 +518,26 @@ section('a server without Python does not fail the learner');
   equal('real code errors are still a gap', gapCategory({ question: { type: 'code_input' }, verdict: 'incorrect', runtimeUnavailable: false }), 'practical_difficulty');
 }
 
+{
+  // An unverified answer must not be scheduled as a retry. Asking the learner
+  // again is remediation for a wrong answer; here nothing was judged, so
+  // "retry_after_incorrect" would spend an attempt that can trigger teaching.
+  const topic = { id: 't1', title: 'Loops', attempts: 0, mastery: 2 };
+  const untouched = applyAnswerToTopic(topic, { verdict: 'partly_correct', verified: false });
+  equal('an unverified answer spends no attempt', untouched.attempts, 0);
+  equal('an unverified answer does not move mastery', untouched.mastery, 2);
+
+  const chosenUnverified = chooseNextTopic([topic], {
+    lastTopicId: 't1', lastVerdict: 'partly_correct', lastVerified: false,
+  });
+  equal('an unverified answer is not a retry for being wrong', chosenUnverified.reason, 'retry_unverified');
+
+  const chosenWrong = chooseNextTopic([topic], {
+    lastTopicId: 't1', lastVerdict: 'incorrect', lastVerified: true,
+  });
+  equal('a genuinely wrong answer still gets a retry', chosenWrong.reason, 'retry_after_incorrect');
+}
+
 /* -------------------------------------------------------------------------- */
 
 console.log(`\n${passed} passed, ${failures.length} failed\n`);

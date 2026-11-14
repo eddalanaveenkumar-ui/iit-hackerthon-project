@@ -272,8 +272,9 @@ router.post(
         const graded = await gradeAnswer({ question: open.question, answer: data.answer, topic, userId: req.userId });
 
         // --- record the evidence, using the existing engines ---------------
+        const verified = !graded.runtimeUnavailable;
         if (topic) {
-          const updated = applyAnswerToTopic(topic, { verdict: graded.verdict, now });
+          const updated = applyAnswerToTopic(topic, { verdict: graded.verdict, verified, now });
           Object.assign(topic, updated);
         }
         session.stats = {
@@ -312,6 +313,7 @@ router.post(
         const next = chooseNextTopic(topics, {
           lastTopicId: open.topicId,
           lastVerdict: graded.verdict,
+          lastVerified: verified,
           now,
         });
 
