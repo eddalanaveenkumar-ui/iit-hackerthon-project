@@ -57,12 +57,28 @@ const STOPWORDS = new Set(
   'a an the and or but of to in on at for with by from as is are was were be been being this that these those it its into about after before during under over between within without using use used can may will shall should must not no all any each other such more most less least than then there their they you your we our i he she his her them'.split(/\s+/),
 );
 
+// Headings that name a container (a week, a section, a paper) rather than a
+// concept. Shared by the markdown-heading path and the plain-line path so a
+// syllabus reads the same whether or not it uses `##`.
+const UNIT_MARKER = /^(week|module|unit|chapter|part|section|paper|semester|syllabus|course)\b/i;
+
 function titleCase(text) {
-  return text
+  // A word the source already wrote in capitals is an acronym, and lowercasing
+  // it destroys it: "TCP/IP" became "Tcp/Ip" and "SQL JOIN" became "Sql Join".
+  // Preserve any word of 2+ letters that is already all-caps.
+  const protectedWords = [];
+  const guarded = text.replace(/\b[A-Z]{2,}\b/g, (word) => {
+    protectedWords.push(word);
+    return `\u0000${protectedWords.length - 1}\u0000`;
+  });
+
+  return guarded
     .toLowerCase()
+    .replace(/\b(and|or|of|to|in|on|at|for|the|a|an|with|by)\b/g, (w) => `\u0001${w}\u0001`)
     .replace(/\b[a-z]/g, (c) => c.toUpperCase())
-    .replace(/\b(And|Or|Of|To|In|On|At|For|The|A|An|With|By)\b/g, (w) => w.toLowerCase())
-    .replace(/^[a-z]/, (c) => c.toUpperCase());
+    .replace(/\u0001([A-Za-z]+)\u0001/g, (_, w) => w.toLowerCase())
+    .replace(/^[a-z]/, (c) => c.toUpperCase())
+    .replace(/\u0000(\d+)\u0000/g, (_, i) => protectedWords[Number(i)]);
 }
 
 /**
@@ -126,7 +142,7 @@ export function extractTopics(text, { limit = 40 } = {}) {
     // 1. explicit markdown heading
     const heading = trimmed.match(/^#{1,6}\s+(.+)$/);
     if (heading) {
-      const looksLikeUnit = /^(week|module|unit|chapter|part)\b/i.test(heading[1].trim());
+      const looksLikeUnit = UNIT_MARKER.test(heading[1].trim());
       // A unit heading names the container the following concepts belong to.
       // The unit itself is not a topic — "Unit 2: Data Structures" is a label,
       // not something to ask a question about — but its concepts are, and they
@@ -166,6 +182,16 @@ export function extractTopics(text, { limit = 40 } = {}) {
 
     // 4. a short, title-cased line on its own — the common shape of a
     //    pasted syllabus where structure survives but markdown does not.
+    //
+    //    A bare "Section A — Java Programming" is the container for what
+    //    follows, not something to be quizzed on: left as a topic it produced a
+    //    question whose stem was literally `You meet "Section A — Java
+    //    Programming" for the first time`. Treat it the way a `## Section` heading
+    //    is treated — record it as the unit, keep the concepts under it.
+    if (UNIT_MARKER.test(trimmed)) {
+      currentUnit = cleanHeading(trimmed);
+      continue;
+    }
     const words = trimmed.split(/\s+/);
     const looksLikeTitle = words.length <= 8
       && !/[.!?;]$/.test(trimmed)
@@ -186,6 +212,8 @@ export function extractTopics(text, { limit = 40 } = {}) {
       if (topics.length >= limit) break;
       const words = sentence.replace(/[.!?]$/, '').split(/\s+/);
       if (words.length < 2 || words.length > 12) continue;
+      // A sentence that is really a container label plus prose is not a concept.
+      if (UNIT_MARKER.test(sentence)) continue;
       push(words.slice(0, 12).join(' '));
     }
   }

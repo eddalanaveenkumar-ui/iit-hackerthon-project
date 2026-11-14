@@ -30,6 +30,7 @@ import {
   localExplanation,
   CHECK_COUNT,
 } from './engine.js';
+import { languageFor } from './question-bank.js';
 
 /**
  * TRACS ROUTES
@@ -333,7 +334,7 @@ router.post(
           session.mode = 'learn';
           session.teachTopicId = next.topic.id;
           session.pendingChecks = null;
-          const checks = await authorChecks({ topic: next.topic, explanation: explanation.document, count: CHECK_COUNT, userId: req.userId });
+          const checks = await authorChecks({ topic: next.topic, explanation: explanation.document, count: CHECK_COUNT, userId: req.userId, language: languageFor(`${session.syllabusText || ''} ${next.topic.title}`) });
           session.pendingChecks = { topicId: next.topic.id, questions: checks, results: [], startedAt: now.toISOString() };
           await saveSession(session);
           return res.json({
@@ -357,6 +358,7 @@ router.post(
             syllabusExcerpt: excerptFor(session, next.topic),
             attempt: (next.topic.attempts || 0) + 1,
             previous: { verdict: graded.verdict, misconception: graded.misconception },
+            language: languageFor(`${session.syllabusText || ''} ${next.topic.title}`),
             userId: req.userId,
             conversationId: String(session._id),
           });
@@ -364,8 +366,8 @@ router.post(
           nextForm = oneQuestionForm({
             question,
             topic: next.topic,
-            index: (session.stats?.answered || 0) + 1,
-            total: Math.max((session.stats?.answered || 0) + 1, topics.length),
+            index: null,
+            total: null,
             sessionId: String(session._id),
           });
         }
@@ -420,6 +422,7 @@ router.post(
         syllabusExcerpt: excerptFor(session, target),
         attempt: (target.attempts || 0) + 1,
         previous,
+        language: languageFor(`${session.syllabusText || ''} ${target.title}`),
         userId: req.userId,
         conversationId: String(session._id),
       });
@@ -435,7 +438,11 @@ router.post(
           say(target.attempts
             ? `Back to **${target.title}** — ${masteryLabel(target).toLowerCase()}. One question at a time.`
             : `Starting with **${target.title}**. One question at a time.`),
-          oneQuestionForm({ question, topic: target, index: 1, total: Math.max(topics.length, 1), sessionId: String(session._id) }),
+          // Deliberately not "of N". One question is asked at a time and the
+          // next one depends on the answer, so there is no fixed total to count
+          // towards — `topics.length` used to land here and told the learner
+          // "question 1 of 14" when they were answering question 1 of 1.
+          oneQuestionForm({ question, topic: target, index: 1, total: null, sessionId: String(session._id) }),
         ], { responseType: 'question_form', topic: target.title }),
         session: sessionView(session),
       });
@@ -479,7 +486,7 @@ router.post(
             reTeach: true,
             previous: { components: (session.lastExplanation?.components || []) },
           }),
-          authorChecks({ topic: target, explanation: null, count: CHECK_COUNT, userId: req.userId }),
+          authorChecks({ topic: target, explanation: null, count: CHECK_COUNT, userId: req.userId, language: languageFor(`${session.syllabusText || ''} ${target.title}`) }),
         ]);
         const missed = assessment.missed.map((m) => `- ${m.feedback}${m.misconception ? ` (${m.misconception})` : ''}`).join('\n');
         session.pendingChecks = null;
@@ -598,6 +605,7 @@ router.post(
         explanation: null,
         count: CHECK_COUNT,
         userId: req.userId,
+        language: languageFor(`${session.syllabusText || ''} ${target.title}`),
       }),
     ]);
 
