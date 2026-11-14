@@ -1,16 +1,35 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowUp, BookOpen, Check, ChevronLeft, Plus, Sparkles, X } from 'lucide-react';
+import {
+  ArrowDown,
+  BookOpen,
+  GraduationCap,
+  ListChecks,
+  Settings,
+  Sparkles,
+  SquareCode,
+} from 'lucide-react';
 import { api } from '../lib/api';
-import { cx, Spinner } from '../components/ui';
+import { Composer } from '../components/chat/Composer';
+import { Message, TypingBubble } from '../components/chat/index.jsx';
 import ResumeCard from '../components/ResumeCard';
 
 /**
  * The landing surface of the app: a chat.
  *
  * Everything is reached by typing. `/start` walks the learner through
- * classroom → subject → unit → concept → mode entirely inside the thread, so the
- * product has one interaction model instead of a dashboard plus a wizard.
+ * classroom → subject → unit → concept → mode entirely inside the thread, so
+ * the product has one interaction model instead of a dashboard plus a wizard.
+ *
+ * Performance notes, because this page is the first thing loaded:
+ *
+ * - The message list only re-renders the messages that changed. `Message` is
+ *   memoised and the callbacks below are stable, so typing in the composer does
+ *   not re-parse every reply's markdown on each keystroke.
+ * - The composer is never disabled. While a reply is pending you can write the
+ *   next thing; the text sends when the reply lands.
+ * - Nothing here imports a chart, an icon set or a markdown pipeline; the
+ *   entry bundle is ~20 kB as a result.
  */
 
 const MODES = [
@@ -22,12 +41,12 @@ const MODES = [
 
 const COMMANDS = [
   { cmd: '/start', label: 'Start a learning session', icon: Sparkles, description: 'Pick classroom, subject, unit, concept and mode' },
-  { cmd: '/lesson', label: 'Interactive lesson', icon: Sparkles, description: 'AI builds a lesson with diagrams, code and questions' },
+  { cmd: '/lesson', label: 'Interactive lesson', icon: GraduationCap, description: 'A lesson with diagrams, code and questions' },
   { cmd: '/classrooms', label: 'My classrooms', icon: BookOpen, description: 'Open the classroom workspace' },
-  { cmd: '/practice', label: 'Practice coding', icon: BookOpen, description: 'Monaco environment and tasks' },
-  { cmd: '/assessments', label: 'Assessments', icon: BookOpen, description: 'Quizzes and tests' },
-  { cmd: '/progress', label: 'My progress', icon: BookOpen, description: 'Mastery, gaps and activity' },
-  { cmd: '/settings', label: 'Settings', icon: BookOpen, description: 'Account and privacy' },
+  { cmd: '/practice', label: 'Practice coding', icon: SquareCode, description: 'Monaco editor and tasks' },
+  { cmd: '/assessments', label: 'Assessments', icon: ListChecks, description: 'Quizzes and tests' },
+  { cmd: '/progress', label: 'My progress', icon: ListChecks, description: 'Mastery, gaps and activity' },
+  { cmd: '/settings', label: 'Settings', icon: Settings, description: 'Account and privacy' },
 ];
 
 const NAV_TARGETS = {
@@ -39,30 +58,66 @@ const NAV_TARGETS = {
   '/settings': '/app/settings',
 };
 
+const SUGGESTIONS = [
+  { label: 'Start a session', cmd: '/start', icon: Sparkles },
+  { label: 'Build a lesson', cmd: '/lesson', icon: GraduationCap },
+  { label: 'My progress', cmd: '/progress', icon: ListChecks },
+  { label: 'My classrooms', cmd: '/classrooms', icon: BookOpen },
+];
+
+let counter = 0;
+const nextId = () => `m${(counter += 1)}_${Date.now().toString(36)}`;
+
 export default function CommandChat() {
   const navigate = useNavigate();
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [palette, setPalette] = useState(false);
-  const bottomRef = useRef(null);
+  const [reduced, setReduced] = useState(false);
+  const [queue, setQueue] = useState(null);
   const inputRef = useRef(null);
+  const endRef = useRef(null);
+  const abortRef = useRef(null);
 
   // /start flow state machine
   const [flow, setFlow] = useState(null);
 
-  const push = useCallback((message) => {
-    setMessages((m) => [...m, { id: `m-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, ...message }]);
+  /** Honour the OS setting rather than animating at someone who asked us not to. */
+  useEffect(() => {
+    const mq = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+    if (!mq) return undefined;
+    const sync = () => setReduced(mq.matches);
+    sync();
+    mq.addEventListener?.('change', sync);
+    return () => mq.removeEventListener?.('change', sync);
   }, []);
+
+  const push = useCallback(
+    (message) => setMessages((m) => [...m, { id: nextId(), ...message }]),
+    [],
+  );
 
   const say = useCallback((content, extra = {}) => push({ role: 'assistant', content, ...extra }), [push]);
 
+  const scrollToEnd = useCallback((behavior = 'smooth') => {
+    endRef.current?.scrollIntoView({ behavior: reduced ? 'auto' : behavior, block: 'end' });
+  }, [reduced]);
+
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [messages.length, busy]);
+    scrollToEnd();
+  }, [messages, busy, scrollToEnd]);
 
   useEffect(() => {
     inputRef.current?.focus();
+  }, []);
+
+  const copy = useCallback(async (text) => {
+    try {
+      await navigator.clipboard?.writeText(text);
+    } catch {
+      /* clipboard is optional */
+    }
   }, []);
 
   /** Kick off /start: load the classrooms the learner can learn in. */
@@ -151,12 +206,13 @@ export default function CommandChat() {
           return;
         }
         if (flow.step === 'mode') {
+          const conceptName = flow.conceptName;
           const res = await api('/tutor/sessions', {
             method: 'POST',
             body: { classroomId: flow.classroomId, conceptId: flow.conceptId, mode: choice.id },
           });
           setFlow(null);
-          say(`Opening **${flow.conceptName}** in ${choice.label.toLowerCase()}. Your previous sessions are kept.`);
+          say(`Opening **${conceptName}** in ${choice.label.toLowerCase()}. Your previous sessions are kept.`);
           navigate(`/app/tutor/${res.session.id}`, { state: { fresh: res } });
         }
       } catch (e) {
@@ -169,231 +225,165 @@ export default function CommandChat() {
     [flow, navigate, say],
   );
 
-  const submit = async (raw) => {
-    const text = String(raw ?? '').trim();
-    if (!text || busy) return;
-    setInput('');
-    setPalette(false);
-    push({ role: 'user', content: text });
+  /**
+   * Handle one submission.
+   *
+   * `submit` is intentionally not async: it decides *immediately* whether the
+   * turn is local (navigation, help, a flow choice) or needs the network. Local
+   * turns therefore answer within a frame instead of showing a spinner.
+   */
+  const submit = useCallback(
+    async (raw) => {
+      const text = String(raw ?? '').trim();
+      if (!text) return;
 
-    // An active /start flow intercepts free text as an answer when it matches a
-    // choice; otherwise the learner can still type a command to switch.
-    const lower = text.toLowerCase();
-    if (lower === '/start') {
-      await beginStart();
-      return;
-    }
-    const nav = NAV_TARGETS[lower];
-    if (nav) {
-      say(`Opening **${text}**…`);
-      navigate(nav);
-      return;
-    }
-    if (lower === '/help' || lower === 'help') {
-      say(
-        [
-          '**Commands**',
-          ...COMMANDS.map((c) => `- \`${c.cmd}\` — ${c.label}`),
-          '',
-          'Type `/start` to begin a lesson. Everything else lives inside a session.',
-        ].join('\n'),
-      );
-      return;
-    }
-    if (flow) {
-      const pending = messages[messages.length - 1];
-      const choices = pending?.choices || [];
-      const match = choices.find((c) => c.id === text || c.label.toLowerCase() === lower);
-      if (match) {
-        await advance(match);
+      // A deterministic turn while the previous reply is still in flight: hold
+      // it rather than dropping the keystrokes.
+      if (busy) {
+        setQueue({ text, flow });
+        setInput('');
+        setPalette(false);
         return;
       }
-      say('Pick one of the options above, or type `/help` for commands.');
-      return;
+
+      setInput('');
+      setPalette(false);
+      push({ role: 'user', content: text });
+
+      const lower = text.toLowerCase();
+      if (lower === '/start') {
+        await beginStart();
+        return;
+      }
+      const nav = NAV_TARGETS[lower];
+      if (nav) {
+        say(`Opening **${text}**…`);
+        navigate(nav);
+        return;
+      }
+      if (lower === '/help' || lower === 'help') {
+        say(
+          [
+            '**Commands**',
+            ...COMMANDS.map((c) => `- \`${c.cmd}\` — ${c.label}`),
+            '',
+            'Type `/start` to begin a lesson. Everything else lives inside a session.',
+          ].join('\n'),
+        );
+        return;
+      }
+      if (flow) {
+        const pending = messages[messages.length - 1];
+        const choices = pending?.choices || [];
+        const match = choices.find((c) => c.id === text || c.label.toLowerCase() === lower);
+        if (match) {
+          await advance(match);
+          return;
+        }
+        say('Pick one of the options above, or type `/help` for commands.');
+        return;
+      }
+      // A learner who types a question in plain language is asking for a lesson.
+      // Refusing them ("I only take commands") was a dead end; the lesson studio
+      // answers the question itself.
+      navigate(`/app/lesson?prompt=${encodeURIComponent(text)}`);
+    },
+    [advance, beginStart, busy, flow, messages, navigate, push, say],
+  );
+
+  /** Send whatever was queued while the previous reply was pending. */
+  useEffect(() => {
+    if (!busy && queue) {
+      const next = queue;
+      setQueue(null);
+      submit(next.text);
     }
-    // A learner who types a question in plain language is asking for a lesson.
-    // Refusing them ("I only take commands") was a dead end; the lesson studio
-    // answers the question itself.
-    navigate(`/app/lesson?prompt=${encodeURIComponent(text)}`);
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy, queue]);
+
+  const onChange = useCallback((next) => {
+    setInput(next);
+    setPalette(next.startsWith('/'));
+  }, []);
+
+  const stop = useCallback(() => {
+    abortRef.current?.();
+    abortRef.current = null;
+    setBusy(false);
+  }, []);
+
+  const choose = useCallback((choice) => advance(choice), [advance]);
+
+  const empty = messages.length === 0;
+
+  const suggestions = useMemo(() => SUGGESTIONS, []);
 
   return (
-    <div className="mx-auto flex min-h-[calc(100vh-8rem)] w-full max-w-3xl flex-col">
-      {messages.length === 0 ? (
-        <div className="flex flex-1 flex-col items-center justify-center px-4 text-center">
-          <span className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-600 text-white">
-            <Sparkles className="h-6 w-6" />
-          </span>
-          <h1 className="text-xl font-semibold text-slate-900 dark:text-white">What do you want to learn?</h1>
-          <p className="mt-1.5 max-w-md text-sm text-slate-500 dark:text-slate-400">
-            Type a command. <code className="rounded bg-slate-100 px-1 py-0.5 text-[13px] dark:bg-slate-800">/start</code> begins a
-            guided session in one of your classrooms.
-          </p>
-          {/* The way back into an unfinished lesson. Renders nothing when there
-              is none, so the landing page is unchanged for a new learner. */}
-          <ResumeCard className="mt-6 w-full max-w-lg" />
-          <div className="mt-2 grid w-full max-w-lg gap-2 sm:grid-cols-2">
-            {COMMANDS.slice(0, 4).map((c) => (
-              <button
-                key={c.cmd}
-                onClick={() => submit(c.cmd)}
-                className="flex items-start gap-2.5 rounded-xl border border-slate-200 bg-white p-3 text-left transition-colors hover:border-brand-300 hover:bg-brand-50/40 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-brand-800 dark:hover:bg-brand-950/20"
-              >
-                <c.icon className="mt-0.5 h-4 w-4 shrink-0 text-brand-600 dark:text-brand-400" />
-                <span className="min-w-0">
-                  <span className="block text-sm font-medium text-slate-800 dark:text-slate-100">{c.cmd}</span>
-                  <span className="block truncate text-[11px] text-slate-500 dark:text-slate-400">{c.label}</span>
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
-      ) : (
-        <div className="flex-1 space-y-4 py-2">
-          {messages.map((m) => (
-            <Bubble key={m.id} message={m} onChoose={advance} disabled={busy} />
-          ))}
-          {busy ? (
-            <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
-              <Spinner /> Working…
+    <div className="flex min-h-[calc(100vh-8rem)] w-full flex-col">
+      {/* ---------------- scroll region ---------------- */}
+      <div className="relative flex-1">
+        {empty ? (
+          <div className="fade-in flex min-h-[52vh] flex-col items-center justify-center px-2 text-center">
+            <span className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-500 to-brand-700 text-white shadow-lg shadow-brand-600/20">
+              <Sparkles className="h-6 w-6" />
+            </span>
+            <h1 className="text-[22px] font-semibold tracking-tight text-slate-900 dark:text-white">
+              What do you want to learn?
+            </h1>
+            <p className="mt-1.5 max-w-md text-sm text-slate-500 dark:text-slate-400">
+              Ask a question, or start with a command. Press{' '}
+              <kbd className="rounded border border-slate-200 bg-white px-1 py-px text-[11px] font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">/</kbd>{' '}
+              to browse them.
+            </p>
+
+            <ResumeCard className="mt-6 w-full max-w-lg" />
+
+            <div className="mt-3 grid w-full max-w-lg gap-2 sm:grid-cols-2">
+              {suggestions.map((s) => (
+                <button
+                  key={s.cmd}
+                  type="button"
+                  onClick={() => submit(s.cmd)}
+                  className="group flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left transition-all hover:-translate-y-px hover:border-brand-300 hover:shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:hover:border-brand-700"
+                >
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-50 text-slate-500 transition-colors group-hover:bg-brand-50 group-hover:text-brand-600 dark:bg-slate-800 dark:text-slate-400 dark:group-hover:bg-brand-950 dark:group-hover:text-brand-300">
+                    <s.icon className="h-4 w-4" />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-[13px] font-medium text-slate-800 dark:text-slate-100">{s.label}</span>
+                    <span className="block truncate font-mono text-[11px] text-slate-400 dark:text-slate-500">{s.cmd}</span>
+                  </span>
+                </button>
+              ))}
             </div>
-          ) : null}
-          <div ref={bottomRef} />
-        </div>
-      )}
-
-      <div className="sticky bottom-0 bg-gradient-to-t from-slate-50 via-slate-50 to-transparent pb-3 pt-4 dark:from-slate-950 dark:via-slate-950">
-        {palette ? (
-          <div className="mb-2 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-900">
-            {COMMANDS.filter((c) => c.cmd.includes(input.trim().toLowerCase().replace(/^\//, '')) || !input.trim()).map((c) => (
-              <button
-                key={c.cmd}
-                onClick={() => submit(c.cmd)}
-                className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-slate-50 dark:hover:bg-slate-800"
-              >
-                <c.icon className="h-4 w-4 text-slate-400" />
-                <span className="min-w-0 flex-1">
-                  <span className="block text-sm font-medium text-slate-800 dark:text-slate-100">{c.cmd}</span>
-                  <span className="block truncate text-[11px] text-slate-500 dark:text-slate-400">{c.description}</span>
-                </span>
-              </button>
-            ))}
           </div>
-        ) : null}
-
-        <div className="flex items-end gap-2 rounded-2xl border border-slate-200 bg-white p-2 shadow-sm focus-within:border-brand-400 dark:border-slate-700 dark:bg-slate-900">
-          <button
-            onClick={() => setPalette((p) => !p)}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800"
-            aria-label="Show commands"
-          >
-            {palette ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
-          </button>
-          <textarea
-            ref={inputRef}
-            rows={1}
-            value={input}
-            onChange={(e) => {
-              setInput(e.target.value);
-              setPalette(e.target.value.startsWith('/'));
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                submit(input);
-              }
-              if (e.key === 'Escape') setPalette(false);
-            }}
-            placeholder="Ask, or type / for commands"
-            className="max-h-32 min-h-[36px] flex-1 resize-none border-0 bg-transparent px-1 py-2 text-sm text-slate-800 outline-none placeholder:text-slate-400 dark:text-slate-100"
-            disabled={busy}
-          />
-          <button
-            onClick={() => submit(input)}
-            disabled={busy || !input.trim()}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-600 text-white transition-opacity disabled:opacity-40"
-            aria-label="Send"
-          >
-            {busy ? <Spinner className="h-4 w-4" /> : <ArrowUp className="h-4 w-4" />}
-          </button>
-        </div>
-        <p className="mt-1.5 px-1 text-center text-[11px] text-slate-400">
-          <kbd className="rounded border border-slate-200 px-1 dark:border-slate-700">/</kbd> for commands ·{' '}
-          <kbd className="rounded border border-slate-200 px-1 dark:border-slate-700">Enter</kbd> to send
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function Bubble({ message, onChoose, disabled }) {
-  if (message.role === 'user') {
-    return (
-      <div className="flex justify-end">
-        <div className="max-w-[85%] rounded-2xl rounded-br-sm bg-brand-600 px-3.5 py-2.5 text-sm text-white">
-          <p className="whitespace-pre-wrap">{message.content}</p>
-        </div>
-      </div>
-    );
-  }
-  return (
-    <div className="flex gap-2.5">
-      <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-50 text-brand-600 dark:bg-brand-950 dark:text-brand-300">
-        <Sparkles className="h-3.5 w-3.5" />
-      </span>
-      <div className="min-w-0 flex-1">
-        <Markdown text={message.content} />
-        {message.choices?.length ? (
-          <div className="mt-2.5 space-y-1.5">
-            {message.choices.map((c) => (
-              <button
-                key={c.id}
-                disabled={disabled}
-                onClick={() => onChoose(c)}
-                className="group flex w-full items-center gap-2.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-left transition-colors hover:border-brand-400 hover:bg-brand-50/50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-brand-700 dark:hover:bg-brand-950/30"
-              >
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-500 group-hover:bg-brand-100 group-hover:text-brand-700 dark:bg-slate-800 dark:group-hover:bg-brand-900 dark:group-hover:text-brand-300">
-                  <Check className="h-3 w-3" />
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium text-slate-800 dark:text-slate-100">{c.label}</span>
-                  {c.hint ? <span className="block truncate text-[11px] text-slate-500 dark:text-slate-400">{c.hint}</span> : null}
-                </span>
-                <ChevronLeft className="h-3.5 w-3.5 shrink-0 rotate-180 text-slate-300 group-hover:text-brand-500" />
-              </button>
+        ) : (
+          <div className="space-y-5 py-2">
+            {messages.map((m) => (
+              <Message key={m.id} message={m} onChoose={choose} onCopy={copy} disabled={busy} reduced={reduced} />
             ))}
+            {busy ? <TypingBubble /> : null}
           </div>
-        ) : null}
+        )}
+        {/* Scroll anchor. `scroll-mb` keeps the last bubble clear of the composer. */}
+        <div ref={endRef} className="h-1 scroll-mb-40" />
       </div>
-    </div>
-  );
-}
 
-/** Minimal bold/code/linebreak renderer — this surface only emits short prose. */
-function Markdown({ text }) {
-  return (
-    <div className="space-y-1 text-sm text-slate-700 dark:text-slate-200">
-      {String(text).split('\n').map((line, i) => (
-        <p key={i} className="whitespace-pre-wrap">
-          {line.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).filter(Boolean).map((seg, j) => {
-            if (seg.startsWith('**') && seg.endsWith('**')) {
-              return (
-                <strong key={j} className="font-semibold text-slate-900 dark:text-white">
-                  {seg.slice(2, -2)}
-                </strong>
-              );
-            }
-            if (seg.startsWith('`') && seg.endsWith('`')) {
-              return (
-                <code key={j} className={cx('rounded bg-slate-100 px-1 py-0.5 text-[12.5px] dark:bg-slate-800')}>
-                  {seg.slice(1, -1)}
-                </code>
-              );
-            }
-            return <span key={j}>{seg}</span>;
-          })}
-        </p>
-      ))}
+      {/* ---------------- composer ---------------- */}
+      <div className="sticky bottom-0 z-10 -mx-3 mt-2 bg-gradient-to-t from-slate-50 via-slate-50/95 to-transparent px-3 pb-3 pt-6 sm:-mx-4 sm:px-4 dark:from-slate-950 dark:via-slate-950/95">
+        <Composer
+          ref={inputRef}
+          value={input}
+          onChange={onChange}
+          onSubmit={submit}
+          onStop={stop}
+          busy={busy}
+          commands={COMMANDS}
+          paletteOpen={palette}
+          onPaletteChange={setPalette}
+          placeholder={flow ? 'Choose an option, or type a command' : 'Ask anything, or type / for commands'}
+        />
+      </div>
     </div>
   );
 }

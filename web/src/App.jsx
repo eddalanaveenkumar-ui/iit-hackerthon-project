@@ -51,6 +51,24 @@ function RequireAdmin({ children }) {
   return children;
 }
 
+/**
+ * The loading state shown while a page chunk is fetched.
+ *
+ * This used to be a full-page spinner *above* the router, so moving between
+ * pages blanked the entire app — the sidebar disappeared and the screen flashed
+ * white — every time a lazy chunk was still in flight. Reserving the content
+ * area keeps the frame in place, which reads as instant even when it isn't.
+ */
+function PageFallback() {
+  return (
+    <div className="mx-auto w-full max-w-4xl px-4 py-6" role="status" aria-label="Loading page">
+      <div className="mx-auto mb-4 h-5 w-40 animate-pulse rounded bg-slate-200 dark:bg-slate-800" />
+      <div className="mx-auto mb-2.5 h-20 w-full animate-pulse rounded-xl bg-slate-200 dark:bg-slate-800" />
+      <div className="mx-auto h-20 w-3/4 animate-pulse rounded-xl bg-slate-200 dark:bg-slate-800" />
+    </div>
+  );
+}
+
 export default function App() {
   return (
     <Suspense fallback={<FullPageSpinner />}>
@@ -62,11 +80,20 @@ export default function App() {
           path="/app"
           element={
             <RequireAuth>
-              <Layout />
+              <Suspense fallback={<FullPageSpinner />}>
+                <Layout />
+              </Suspense>
             </RequireAuth>
           }
         >
-          <Route index element={<CommandChat />} />
+          <Route
+            index
+            element={
+              <Suspense fallback={<PageFallback />}>
+                <CommandChat />
+              </Suspense>
+            }
+          />
           {/* /start is a command inside the chat, not a route: keep the old URL working. */}
           <Route path="start" element={<Navigate to="/app" replace />} />
 

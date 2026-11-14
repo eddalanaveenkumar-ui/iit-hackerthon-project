@@ -1,6 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { ChevronDown, GraduationCap, LogOut, Menu, Moon, Settings, ShieldCheck, Sun } from 'lucide-react';
+import ChevronDown from 'lucide-react/icons/chevron-down';
+import GraduationCap from 'lucide-react/icons/graduation-cap';
+import LogOut from 'lucide-react/icons/log-out';
+import Menu from 'lucide-react/icons/menu';
+import Moon from 'lucide-react/icons/moon';
+import Settings from 'lucide-react/icons/settings';
+import ShieldCheck from 'lucide-react/icons/shield-check';
+import Sun from 'lucide-react/icons/sun';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { Avatar, cx } from './ui';

@@ -1,6 +1,43 @@
 import { lazy, Suspense } from 'react';
-import { AlertTriangle } from 'lucide-react';
 import { cx } from '../../ui';
+import AlertTriangle from 'lucide-react/icons/alert-triangle';
+import ArrowRight from 'lucide-react/icons/arrow-right';
+import BarChart3 from 'lucide-react/icons/bar-chart-3';
+import BookOpen from 'lucide-react/icons/book-open';
+import BookOpenCheck from 'lucide-react/icons/book-open-check';
+import Brain from 'lucide-react/icons/brain';
+import Bug from 'lucide-react/icons/bug';
+import CheckCircle2 from 'lucide-react/icons/check-circle-2';
+import ChevronRight from 'lucide-react/icons/chevron-right';
+import Clock from 'lucide-react/icons/clock';
+import Code2 from 'lucide-react/icons/code-2';
+import Cpu from 'lucide-react/icons/cpu';
+import Database from 'lucide-react/icons/database';
+import Eye from 'lucide-react/icons/eye';
+import Flag from 'lucide-react/icons/flag';
+import FlaskConical from 'lucide-react/icons/flask-conical';
+import GitBranch from 'lucide-react/icons/git-branch';
+import GraduationCap from 'lucide-react/icons/graduation-cap';
+import Info from 'lucide-react/icons/info';
+import Layers from 'lucide-react/icons/layers';
+import Lightbulb from 'lucide-react/icons/lightbulb';
+import ListChecks from 'lucide-react/icons/list-checks';
+import PenTool from 'lucide-react/icons/pen-tool';
+import PlayCircle from 'lucide-react/icons/play-circle';
+import Puzzle from 'lucide-react/icons/puzzle';
+import Repeat from 'lucide-react/icons/repeat';
+import Rocket from 'lucide-react/icons/rocket';
+import Search from 'lucide-react/icons/search';
+import Shapes from 'lucide-react/icons/shapes';
+import Sigma from 'lucide-react/icons/sigma';
+import Sparkles from 'lucide-react/icons/sparkles';
+import SquareFunction from 'lucide-react/icons/square-function';
+import Star from 'lucide-react/icons/star';
+import Target from 'lucide-react/icons/target';
+import Terminal from 'lucide-react/icons/terminal';
+import Trophy from 'lucide-react/icons/trophy';
+import Wrench from 'lucide-react/icons/wrench';
+import Zap from 'lucide-react/icons/zap';
 
 /**
  * Shared primitives for the DynamicRenderer.
@@ -123,69 +160,67 @@ export function Notice({ children, tone = 'warning' }) {
 /* icons                                                                      */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * The icons, imported individually.
+ *
+ * This was `await import('lucide-react')` — a namespace import, which defeats
+ * tree-shaking for the *entire* library. Every one of lucide's ~2 350 icons was
+ * bundled and downloaded before the chat could paint: 839 kB raw, 213 kB
+ * gzipped, on every page. The set below is fixed and small (the protocol only
+ * allows these names), so importing them directly costs a few kB.
+ */
+
 /** Registry of icon names the protocol allows. Anything else renders nothing. */
 const ICONS = {
-  book: 'BookOpen',
-  bulb: 'Lightbulb',
-  target: 'Target',
-  code: 'Code2',
-  chart: 'BarChart3',
-  sparkles: 'Sparkles',
-  check: 'CheckCircle2',
-  flag: 'Flag',
-  clock: 'Clock',
-  layers: 'Layers',
-  sigma: 'Sigma',
-  flask: 'FlaskConical',
-  brain: 'Brain',
-  terminal: 'Terminal',
-  list: 'ListChecks',
-  alert: 'AlertTriangle',
+  book: BookOpen,
+  bulb: Lightbulb,
+  target: Target,
+  code: Code2,
+  chart: BarChart3,
+  sparkles: Sparkles,
+  check: CheckCircle2,
+  flag: Flag,
+  clock: Clock,
+  layers: Layers,
+  sigma: Sigma,
+  flask: FlaskConical,
+  brain: Brain,
+  terminal: Terminal,
+  list: ListChecks,
+  alert: AlertTriangle,
   // kebab-case lucide names used by the authoring sketches
-  'book-open': 'BookOpen',
-  'book-open-check': 'BookOpenCheck',
-  'play-circle': 'PlayCircle',
-  'arrow-right': 'ArrowRight',
-  lightbulb: 'Lightbulb',
-  'chevron-right': 'ChevronRight',
-  'graduation-cap': 'GraduationCap',
-  puzzle: 'Puzzle',
-  rocket: 'Rocket',
-  cpu: 'Cpu',
-  'function-square': 'SquareFunction',
-  database: 'Database',
-  'git-branch': 'GitBranch',
-  repeat: 'Repeat',
-  shapes: 'Shapes',
-  'pen-tool': 'PenTool',
-  trophy: 'Trophy',
-  bug: 'Bug',
-  wrench: 'Wrench',
-  star: 'Star',
-  info: 'Info',
-  zap: 'Zap',
-  eye: 'Eye',
-  search: 'Search',
+  'book-open': BookOpen,
+  'book-open-check': BookOpenCheck,
+  'play-circle': PlayCircle,
+  'arrow-right': ArrowRight,
+  lightbulb: Lightbulb,
+  'chevron-right': ChevronRight,
+  'graduation-cap': GraduationCap,
+  puzzle: Puzzle,
+  rocket: Rocket,
+  cpu: Cpu,
+  'function-square': SquareFunction,
+  database: Database,
+  'git-branch': GitBranch,
+  repeat: Repeat,
+  shapes: Shapes,
+  'pen-tool': PenTool,
+  trophy: Trophy,
+  bug: Bug,
+  wrench: Wrench,
+  star: Star,
+  info: Info,
+  zap: Zap,
+  eye: Eye,
+  search: Search,
 };
 
-const iconCache = new Map();
-
 export function Icon({ name, className = 'h-4 w-4' }) {
-  const key = ICONS[name];
-  if (!key) return null;
-  if (!iconCache.has(key)) {
-    iconCache.set(key, lazy(async () => {
-      const mod = await import('lucide-react');
-      const Component = mod[key];
-      return { default: Component || (() => null) };
-    }));
-  }
-  const Component = iconCache.get(key);
-  return (
-    <Suspense fallback={<span className={className} aria-hidden />}>
-      <Component className={className} aria-hidden />
-    </Suspense>
-  );
+  // `ICONS` maps a protocol name straight to the component, so the value is
+  // already what we need to render.
+  const Component = ICONS[name];
+  if (!Component) return null;
+  return <Component className={className} aria-hidden />;
 }
 
 /** Accessible label for a section, used by containers. */

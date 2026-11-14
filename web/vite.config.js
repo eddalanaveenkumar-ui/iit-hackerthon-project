@@ -25,11 +25,21 @@ export default defineConfig({
     chunkSizeWarningLimit: 1800,
     rollupOptions: {
       output: {
+        /**
+         * Only Monaco is split out; everything else is left to the bundler.
+         *
+         * There used to be `charts` and `icons` chunks here, and both were a
+         * trap. Putting recharts in a manual chunk made that chunk a dependency
+         * of the entry, so 463 kB of chart code (with React bundled inside it)
+         * downloaded before the chat could paint, even though recharts is only
+         * reachable through a `lazy()` renderer. Left alone, it splits into a
+         * lazy `AreaChart`/`LineChart` pair and the entry stays ~20 kB.
+         *
+         * Monaco keeps its own chunk: it is genuinely huge and the practice
+         * editor wants it as one unit.
+         */
         manualChunks(id) {
-          if (!id.includes('node_modules')) return undefined;
-          if (id.includes('monaco')) return 'monaco';
-          if (id.includes('recharts') || id.includes('d3-')) return 'charts';
-          if (id.includes('react-router') || id.includes('/react/') || id.includes('react-dom')) return 'vendor';
+          if (id.includes('node_modules') && id.includes('monaco')) return 'monaco';
           return undefined;
         },
       },

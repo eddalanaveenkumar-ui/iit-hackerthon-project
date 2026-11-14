@@ -2,9 +2,73 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ========================================================================== */
+/* motion                                                                     */
+/* ========================================================================== */
+/*
+ * Motion is part of the product here, not decoration: a chat that answers in
+ * one second feels slow if nothing moves while you wait, and instant if it does.
+ * Every animation below is short (≤ 320 ms) and cheap (opacity + transform
+ * only, so it runs on the compositor and never triggers layout).
+ *
+ * `prefers-reduced-motion` is honoured globally at the bottom of this file: the
+ * content still appears, it just stops moving.
+ */
+@keyframes lm-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes lm-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes lm-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* A caret that blinks while text is arriving. */
+@keyframes lm-caret {
+  0%, 45% { opacity: 1; }
+  55%, 100% { opacity: 0; }
+}
+
+/* Three dots, staggered — what is shown while the model is thinking. */
+@keyframes lm-bounce {
+  0%, 70%, 100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  35% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+/* The sweep across the top of the composer while a request is in flight. */
+@keyframes lm-sweep {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
 @layer base {
   html {
     -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
   }
   body {
     @apply bg-slate-50 text-slate-800 dark:bg-slate-950 dark:text-slate-200;
@@ -28,6 +92,10 @@
   }
   :focus-visible {
     @apply outline-none ring-2 ring-brand-500/60 ring-offset-1 ring-offset-white dark:ring-offset-slate-950;
+  }
+  /* Room for the sticky composer, so the last message is never underneath it. */
+  [data-lm-scroll] {
+    scrollbar-gutter: stable;
   }
 }
 
@@ -100,4 +168,64 @@
   .prose-tutor pre { @apply mb-2 overflow-x-auto rounded-lg bg-slate-900 p-3 font-mono text-xs text-slate-100; }
   .prose-tutor pre code { @apply bg-transparent p-0 text-inherit; }
   .prose-tutor blockquote { @apply border-l-2 border-brand-400 pl-3 text-slate-600 dark:text-slate-300; }
+
+  /* ---- chat ---------------------------------------------------------- */
+
+  /* A message arriving. Cheap: opacity + 8px of transform. */
+  .msg-in {
+    animation: lm-rise 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  /* A panel opening under a message (commands, attachments). */
+  .panel-in {
+    animation: lm-pop 160ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    transform-origin: top center;
+  }
+  .fade-in {
+    animation: lm-fade 220ms ease-out both;
+  }
+  /* Typing indicator dots. */
+  .dot {
+    animation: lm-bounce 1.15s infinite ease-in-out;
+  }
+  .dot-2 { animation-delay: 0.14s; }
+  .dot-3 { animation-delay: 0.28s; }
+  /* The composer's progress sweep while a reply is pending. */
+  .sweep::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(90deg, transparent, rgba(37, 99, 235, 0.18), transparent);
+    animation: lm-sweep 1.15s infinite ease-in-out;
+    pointer-events: none;
+  }
+  /* Composer shadow that lifts when it has focus. */
+  .composer {
+    @apply rounded-[22px] border border-slate-200 bg-white transition-shadow duration-200 dark:border-slate-700 dark:bg-slate-900;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 8px 24px -14px rgba(15, 23, 42, 0.18);
+  }
+  .composer:focus-within {
+    @apply border-brand-400 dark:border-brand-600;
+    box-shadow: 0 2px 4px rgba(15, 23, 42, 0.05), 0 16px 40px -18px rgba(37, 99, 235, 0.45);
+  }
+}
+
+/* Motion is decoration. Anyone who asks for less still gets every element —
+   it simply appears in place instead of travelling. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .msg-in,
+  .panel-in,
+  .fade-in {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
 }
