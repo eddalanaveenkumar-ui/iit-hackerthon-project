@@ -574,6 +574,58 @@ export async function gradeAnswer({ question, answer, topic, userId }) {
 const MILESTONE = 5;
 
 /**
+ * Why the learner's answer was wrong, at length, with a worked example.
+ *
+ * The old feedback was one line — "The answer is: X — because Y". That states
+ * the right answer but never names the mistake. A learner who picked a specific
+ * wrong option is holding a specific wrong idea, and naming it is the part that
+ * teaches. This produces the shape asked for:
+ *
+ *   what you chose  ->  the rule  ->  a concrete example  ->  the caller appends
+ *   "try this one" and the next question
+ *
+ * Pure string assembly over what grading already knows, so it costs no model
+ * call and cannot fail. When the question carries no explanation it says what it
+ * does know rather than inventing one.
+ *
+ * @returns {{ text: string, example: string|null }|null} null when there is
+ *          nothing specific to say (a correct answer has no mistake to explain).
+ */
+export function explainMistake({ question, chosen, verdict = 'incorrect' }) {
+  if (!question || verdict === 'correct') return null;
+
+  const options = Array.isArray(question.options) ? question.options.map((o) => String(o)) : [];
+  const right = Number.isInteger(question.correct_index) ? options[question.correct_index] : null;
+  const picked = String(chosen ?? '').trim();
+  const explanation = String(question.explanation || '').trim();
+  if (!right && !explanation) return null;
+
+  const parts = [];
+  const pickedOne = picked && options.find((o) => o.toLowerCase() === picked.toLowerCase());
+  if (pickedOne && right && pickedOne !== right) {
+    parts.push(`You chose **"${pickedOne}"** — that is the answer most people land on, and it is the part worth unlearning.`);
+  } else if (picked) {
+    parts.push(`Your answer was **"${picked.slice(0, 140)}"**.`);
+  }
+  if (right) parts.push(`The correct answer is **${right}**.`);
+  if (explanation) parts.push(explanation);
+
+  // A worked example, built from the question's own code when it has some, so
+  // the illustration is about the thing just asked rather than a generic analogy.
+  let example = null;
+  if (question.code) {
+    const code = String(question.code).trim();
+    example = question.print ? `${code}  →  ${question.print}` : code;
+    parts.push(`Here it is, run once:\n\n${example}`);
+  } else if (right) {
+    example = `Apply the rule to one concrete case before choosing: the rule above decides "${right.slice(0, 90)}", not any of the others.`;
+    parts.push('Worked through once, slowly: read the options as claims, and ask of each whether the rule you just read would produce it. Only one survives that test.');
+  }
+
+  return { text: parts.join('\n\n'), example };
+}
+
+/**
  * The feedback document shown after an answer.
  *
  * It carries the verdict, what went wrong, and — when there is one — the next
@@ -583,6 +635,7 @@ const MILESTONE = 5;
 export function feedbackDocument({
   verdict,
   feedback,
+  mistake = null,
   topic,
   stats,
   nextQuestion = null,
@@ -595,13 +648,16 @@ export function feedbackDocument({
   components.push({
     id: `verdict_${encoder()}`,
     type: 'text',
+    // `mistake` is the long form: what you chose, the rule, a worked example.
+    // It replaces the one-line reason for a miss, because "the answer is X" does
+    // not tell a learner which idea to give up.
     content: verdict === 'correct'
       ? `**Correct.** ${feedback}`.trim()
       : verdict === 'partly_correct'
-        ? `**Almost.** ${feedback}`.trim()
+        ? `**Almost.** ${mistake || feedback}`.trim()
         : verdict === 'unanswered'
           ? `**No answer given.** ${feedback}`.trim()
-          : `**Not quite.** ${feedback}`.trim(),
+          : `**Not quite.** ${mistake || feedback}`.trim(),
     style: { tone },
   });
 
@@ -618,7 +674,14 @@ export function feedbackDocument({
   }
 
   if (nextQuestion) {
-    components.push(say('Next question:', { tone: 'neutral' }));
+    // The hand-off is explicit: explain, then ask. The learner should never have
+    // to wonder whether the question below is a new topic or the same one again.
+    components.push(say(
+      verdict === 'correct'
+        ? 'Try this one — same idea, one step further.'
+        : 'Try this one — it targets exactly the step that went wrong.',
+      { tone: 'neutral' },
+    ));
     components.push(nextQuestion);
   }
 
@@ -637,9 +700,12 @@ export function feedbackDocument({
     components.push({
       id: `commands_${encoder()}`,
       type: 'actions',
+      // `command` is carried explicitly. Without it the client had to guess
+      // from `action`, and every `continue_lesson` fell through to `/test` —
+      // which is why pressing /learn sometimes took the /test path.
       actions: [
-        { id: 'go_test', label: 'Next question (/test)', action: 'continue_lesson', tone: 'brand' },
-        { id: 'go_learn', label: 'Explain it (/learn)', action: 'continue_lesson', tone: 'neutral' },
+        { id: 'go_test', label: 'Try a question (/test)', action: 'continue_lesson', command: 'test', tone: 'brand' },
+        { id: 'go_learn', label: 'Explain it (/learn)', action: 'continue_lesson', command: 'learn', tone: 'neutral' },
       ],
     });
   }
