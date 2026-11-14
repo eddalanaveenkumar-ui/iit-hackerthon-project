@@ -460,7 +460,7 @@ router.post(
       const graded = await gradeAnswer({ question, answer: data.answer, topic: target, userId: req.userId });
       pending.results = [...(pending.results || []).filter((r) => r.question_id !== question.id), { question_id: question.id, ...graded }];
 
-      const assessment = assessUnderstanding(pending.results);
+      const assessment = assessUnderstanding(pending.results, pending.questions.length);
       // Every check has now been attempted exactly once. If any was missed, stop
       // asking and re-teach — that is the whole point of the checks, and asking
       // an already-answered question a second time would just repeat it.

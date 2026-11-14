@@ -5,6 +5,7 @@ import { parseComponent, repairUiDocument, UI_PROTOCOL_VERSION, UI_LIMITS } from
 import { localEvaluateAnswers } from '../ai/ui/teaching-engine.js';
 import { gradeCodingAnswers, applyExecutionVerdicts } from '../learning/code-grading.js';
 import { executeCode } from '../../utils/sandbox.js';
+import { factsFor, languageFor } from './question-bank.js';
 
 /**
  * TRACS ENGINE
@@ -161,6 +162,97 @@ function codeStub(topic) {
   return { prompt: `Declare a variable called \`answer\` set to 42, then print it.`, expected: '42' };
 }
 
+/**
+ * A multiple-choice question worth answering.
+ *
+ * Three sources, in order of quality:
+ *
+ * 1. **A known concept.** "Loops and Iteration" gets asked how many times
+ *    `range(3)` runs, with three wrong answers a student might actually believe.
+ * 2. **The syllabus's own words**, when it said anything under this heading.
+ * 3. **The title's own structure**, when it did not — "Type Casting" asks what a
+ *    cast does, not what its "main idea" is.
+ *
+ * What is never produced is the old fallback: a question whose answer is always
+ * the first option and whose distractors are absurdities ("It has no practical
+ * use"). That is not a question, it is a coin that always lands heads.
+ */
+function multipleChoice(topic, { attempt = 1, summary = '' } = {}) {
+  const [fact] = factsFor(topic);
+
+  if (fact) {
+    const options = shuffleStable([fact.answer, ...fact.wrong].slice(0, 4), topic?.title || '');
+    return {
+      question: fact.ask,
+      options,
+      correct_index: options.indexOf(fact.answer),
+      hint: `Think about how ${fact.label.toLowerCase()} actually behaves, not what it sounds like it should do.`,
+      explanation: fact.explain,
+      source: 'local',
+    };
+  }
+
+  // The syllabus said something under this heading: quiz on its own claim.
+  const clean = String(summary || '').replace(/\s+/g, ' ').trim();
+  if (clean.length > 40) {
+    const trueStatement = clean.split(/(?<=[.;])\s+/)[0].trim().slice(0, 160);
+    const options = shuffleStable(
+      [trueStatement, `It is only relevant to advanced students`, `It has no practical use`, `It is unrelated to the rest of the syllabus`],
+      topic?.title || '',
+    );
+    return {
+      question: `According to your syllabus, which of these is true about "${topic.title}"?`,
+      options,
+      correct_index: options.indexOf(trueStatement),
+      hint: 'One of these is the sentence your own syllabus used.',
+      source: 'local',
+    };
+  }
+
+  // Nothing but a title, and no fact for it. Rather than a coin-flip on a
+  // definition, ask the learner to *do* something with it: the options are
+  // distinguishable by reasoning even without background knowledge, because only
+  // one of them can be true of a syllabus item.
+  const title = String(topic?.title || 'this topic');
+  const correct = `Work through an example of ${title} by hand, then check it against the rule`;
+  const options = shuffleStable(
+    [
+      correct,
+      `Memorise the definition of ${title} and move on`,
+      `Skip ${title} until the exam, then read the summary`,
+      `Wait for someone to demonstrate ${title} first`,
+    ],
+    title,
+  );
+  return {
+    question: `You meet "${title}" for the first time. Which way of working actually builds understanding of it?`,
+    options,
+    correct_index: options.indexOf(correct),
+    hint: 'A syllabus heading names a skill. Which option involves doing it rather than reading about it?',
+    source: 'local',
+  };
+}
+
+/**
+ * Shuffle so the right answer is not always first, while staying deterministic:
+ * a stable string hash seeds the order, so the same topic always renders the
+ * same way (a re-render cannot move the answer) but different topics differ.
+ */
+function shuffleStable(items, seed) {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i += 1) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  const out = [...items];
+  for (let i = out.length - 1; i > 0; i -= 1) {
+    h = (Math.imul(h, 48271) + 11) % 2147483647;
+    const j = Math.abs(h) % (i + 1);
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
 /** The deterministic question, used when the model is unavailable or malformed. */
 export function localQuestion(topic, { attempt = 1, subject = '' } = {}) {
   const type = pickQuestionType(topic, { attempt, subject });
@@ -168,22 +260,8 @@ export function localQuestion(topic, { attempt = 1, subject = '' } = {}) {
   const base = { id: `q${Date.now().toString(36)}`, type, hint: undefined };
 
   if (type === 'radio') {
-    return {
-      ...base,
-      question: attempt >= 2
-        ? `Which statement about "${topic.title}" is correct?`
-        : `What is the main idea of "${topic.title}"?`,
-      options: [
-        summary ? summary.split(/[.;]/)[0].trim().slice(0, 90) : `The core definition of ${topic.title}`,
-        `It is unrelated to the rest of the syllabus`,
-        `It only applies to advanced students`,
-        `It has no practical use`,
-      ],
-      // The first option is the syllabus's own sentence, so it is correct by
-      // construction — but only when the syllabus actually said something.
-      correct_index: 0,
-      hint: 'Look back at what the syllabus said under this heading.',
-    };
+    const mc = multipleChoice(topic, { attempt, summary });
+    return { ...base, ...mc };
   }
   if (type === 'number') {
     return {
@@ -417,9 +495,11 @@ export async function gradeAnswer({ question, answer, topic, userId }) {
       // The verdict label ("Correct." / "Not quite.") is added by
       // feedbackDocument. Repeating it here produced "Not quite. Not quite. The
       // answer is: ..." in the learner's view — so this says only the reason.
+      // On a miss, say what the right answer is *and why*. A verdict without a
+      // reason teaches nothing — the learner needs the rule, not the letter.
       feedback: correct
-        ? 'That is right.'
-        : `The answer is: ${question.options?.[question.correct_index]}`,
+        ? (question.explanation ? `That is right. ${question.explanation}` : 'That is right.')
+        : `The answer is: ${question.options?.[question.correct_index]}${question.explanation ? ` — ${question.explanation}` : ''}`,
       misconception: correct ? null : `chose "${String(text).slice(0, 160)}" instead of "${String(question.options?.[question.correct_index] || '').slice(0, 160)}"`,
       correct_answer: question.options?.[question.correct_index] || null,
       execution: null,
@@ -736,13 +816,16 @@ Return ONLY JSON: {"questions":[{"question":"…","type":"radio","options":["…
   }).catch(() => ({ data: null }));
 
   const raw = Array.isArray(data?.questions) ? data.questions : [];
+  // A FRESH fallback per question. This was `localQuestion(...)` evaluated once
+  // and reused, so when the provider's questions were unusable every check fell
+  // back to the *same object* — same id. Two checks sharing one id is poison:
+  // answering one marks both attempted, so the round ends after a single answer
+  // (and the "question 1 of 2" label becomes a lie).
   const questions = raw.slice(0, count).map((q) => normaliseQuestion(q, localQuestion(topic, { attempt: 1 }), topic));
-  if (questions.length) return questions;
 
   // A deterministic fallback that still tests understanding: restate the idea,
   // then apply it. It is graded by the prose evaluator, so "I don't know" is
-  // correctly treated as not understood. Two questions so a single lucky guess
-  // cannot close the loop.
+  // correctly treated as not understood.
   const fallback = [
     {
       id: `q${encoder()}`,
@@ -759,7 +842,36 @@ Return ONLY JSON: {"questions":[{"question":"…","type":"radio","options":["…
       source: 'local',
     },
   ];
-  return fallback.slice(0, Math.max(1, count));
+
+  // Top up rather than return early.
+  //
+  // This used to be `if (questions.length) return questions`, which was wrong in
+  // a way that broke the whole /learn loop: a provider that returns *fewer*
+  // questions than asked (the built-in local analyser returns one) produced a
+  // one-question check set. That looks fine, but the closing rule is "re-teach
+  // when every check was missed", so a single wrong answer ended the round — and
+  // the second check the learner was told about ("question 1 of 2") never
+  // existed. Two checks are the point: one lucky guess must not close the loop.
+  const filled = [...questions];
+  for (let i = 0; filled.length < count && i < fallback.length; i += 1) {
+    const candidate = fallback[i];
+    // Never repeat a question that is already in the set.
+    if (filled.some((q) => String(q.question) === String(candidate.question))) continue;
+    filled.push(candidate);
+  }
+
+  // Ids must be unique. `normaliseQuestion` falls back to a shared object when a
+  // provider's question is unusable, so two checks could arrive with the same id
+  // — and then answering one satisfies `every(... answered ...)` for both, which
+  // silently ends the round after a single answer.
+  const seen = new Set();
+  return filled.slice(0, Math.max(1, count)).map((q) => {
+    let id = String(q.id || '');
+    if (!id || seen.has(id)) id = `q${encoder()}`;
+    while (seen.has(id)) id = `q${encoder()}`;
+    seen.add(id);
+    return id === q.id ? q : { ...q, id };
+  });
 }
 
 /**
@@ -771,17 +883,29 @@ Return ONLY JSON: {"questions":[{"question":"…","type":"radio","options":["…
  * The one exception is a check that could not be graded at all — a code answer
  * that failed to run, say — which is treated as unanswered rather than wrong.
  */
-export function assessUnderstanding(results) {
+/**
+ * Every check must be answered, and every one correct.
+ *
+ * `expected` is how many checks were set. It is required, because "no misses so
+ * far" is not the same as "understood": without it, getting the first of two
+ * checks right declared the topic understood and the second check was never
+ * asked — the learner was credited for a question they were never shown.
+ */
+export function assessUnderstanding(results, expected = null) {
   const graded = (results || []).filter((r) => r.verdict !== 'not_graded');
+  const total = Number.isFinite(Number(expected)) ? Number(expected) : graded.length;
   if (!graded.length) {
-    return { understood: false, reason: 'ungraded', correct: 0, total: 0, missed: [] };
+    return { understood: false, reason: 'ungraded', correct: 0, total, answered: 0, missed: [] };
   }
   const missed = graded.filter((r) => r.verdict !== 'correct');
+  const allAnswered = graded.length >= total;
+  const understood = missed.length === 0 && allAnswered;
   return {
-    understood: missed.length === 0,
-    reason: missed.length === 0 ? 'demonstrated' : 'missed_check',
+    understood,
+    reason: !allAnswered ? 'incomplete' : missed.length === 0 ? 'demonstrated' : 'missed_check',
     correct: graded.length - missed.length,
-    total: graded.length,
+    total,
+    answered: graded.length,
     missed: missed.map((r) => ({ question_id: r.question_id, verdict: r.verdict, feedback: r.feedback, misconception: r.misconception })),
   };
 }

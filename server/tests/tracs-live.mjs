@@ -132,7 +132,10 @@ ok('and stays one question at a time', (checkAns.json?.document?.components || [
 
   // Answer every check wrongly, one at a time, until the loop stops asking.
   for (let turn = 0; turn < 4; turn += 1) {
-    const form = (last?.document?.components || teach.json?.document?.components || []).filter((c) => c.type === 'question_form')[0];
+    // `last` is the HTTP wrapper ({ status, json }), so the document hangs off
+    // `last.json`. Reading `last.document` silently fell through to the *first*
+    // explanation's form on every turn, which re-answered question 1 forever.
+    const form = (last?.json?.document?.components || teach.json?.document?.components || []).filter((c) => c.type === 'question_form')[0];
     if (!form) break;
     const question = form.questions[0];
     if (!question || asked.has(`${turn}:${question.id}`)) break;
