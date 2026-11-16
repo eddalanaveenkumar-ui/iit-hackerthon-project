@@ -309,7 +309,11 @@ export const FACTS = [
     lang: 'java',
     match: /variables? (and|&) (data ?types?|primitive types?)|data ?types?|primitive types?/,
     label: 'Variables and primitive types',
-    ask: 'Java has `int total = 7;` and later `total = 7.5;`. What happens?',
+    // `code` is shown as a block above the question, so the sentence must not
+    // also contain it: "Java has the code above" reads, "Java has `a` and
+    // later `b`" does not.
+    code: 'int total = 7;\ntotal = 7.5;',
+    ask: 'This Java program does not compile. What is the reason?',
     answer: 'It does not compile — 7.5 is a double and does not fit in an int without a cast',
     wrong: [
       'total quietly becomes the double 7.5',

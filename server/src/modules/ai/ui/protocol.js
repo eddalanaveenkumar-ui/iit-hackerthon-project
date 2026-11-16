@@ -930,6 +930,17 @@ const dynamicQuestion = z.strictObject({
   max: z.number().finite().optional(),
   step: z.number().finite().positive().optional(),
   language: z.enum(['javascript', 'python', 'java', 'sql']).optional(),
+  // The code the question is *about*, kept separate from the prose.
+  //
+  // A coding question used to arrive as one string — "After executing
+  // `x = 10; x = 'hello'`, what is the type of `x`?" — with the code inline in
+  // the sentence. The client could only render that as running text, so the
+  // learner had to read a program out of a paragraph. Carrying it as its own
+  // field lets the renderer put it in a block, which is how code is read.
+  code_snippet: z.string().max(4000).optional(),
+  // Which inline spans it was lifted from, so the renderer replaces exactly
+  // those with a pointer and leaves every other backtick alone.
+  code_inline: z.array(z.string().max(500)).max(6).optional(),
   accept: z.array(z.string().max(20)).max(6).optional(),
   // A coding question is graded by *running* the answer, so the author declares
   // what correct looks like. Without one of these the answer is executed and

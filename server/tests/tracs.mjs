@@ -35,6 +35,7 @@ import {
   gapCategory,
   localExplanation,
   feedbackDocument,
+  extractCodeSnippet,
   CHECK_COUNT,
 } from '../src/modules/tracs/engine.js';
 import { factsFor, languageFor } from '../src/modules/tracs/question-bank.js';
@@ -957,6 +958,97 @@ section('a deployment without Python does not set ungradeable questions');
   equal('and its percentage', p2.items[0].value, 75);
 }
 
+
+/* -------------------------------------------------------------------------- */
+/* CODE GETS ITS OWN BLOCK                                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A question about a program is unreadable while the program sits inside the
+ * sentence: "After executing `x = 10; x = 'hello'; x = 3.14`, what is the type
+ * of `x`?" is a paragraph the learner has to parse back into code. The server
+ * lifts such programs into `code_snippet` (rendered as a block above the
+ * question) and reports the spans it came from in `code_inline`, which the
+ * client turns into a pointer.
+ *
+ * Two rules hold everywhere here:
+ *
+ *   - the sentence is never rewritten. Only the lifted spans are replaced, on
+ *     the client, and only with "the code above".
+ *   - short inline expressions stay inline. Lifting `7 // 2` out of "What does
+ *     `7 // 2` evaluate to?" would damage a sentence that was already fine.
+ */
+{
+  const python = { type: 'radio', language: 'python' };
+
+  // A multi-statement program is substantial: it goes in the block.
+  const multi = extractCodeSnippet('After `x = 10; x = \'hello\'; x = 3.14`, what is the type of `x`?', python);
+  equal('a multi-statement program is lifted', multi.code_snippet, "x = 10; x = 'hello'; x = 3.14");
+  equal('the sentence is left untouched', multi.question, 'After `x = 10; x = \'hello\'; x = 3.14`, what is the type of `x`?');
+  check('and the lifted spans are reported for the client to replace',
+    Array.isArray(multi.inline) && multi.inline.includes("`x = 10; x = 'hello'; x = 3.14`"), JSON.stringify(multi.inline));
+
+  // Two statements a line apart are still one program.
+  const java = extractCodeSnippet('Java has `int total = 7;` and later `total = 7.5;`. What happens?', { type: 'radio', language: 'java' });
+  equal('statements separated by prose are joined as one program', java.code_snippet, 'int total = 7;\ntotal = 7.5;');
+  check('the connecting prose does not leak into the program', !/and later/.test(java.code_snippet), java.code_snippet);
+  equal('both spans are reported', (java.inline || []).length, 2);
+
+  // Short expressions are not programs and must stay in the sentence.
+  for (const [stem, note] of [
+    ['What does `7 // 2` evaluate to in Python 3?', 'an operator expression'],
+    ['How many times does `for i in range(3)` run its body?', 'a single short statement'],
+    ['Which statement about `None` is correct?', 'a bare literal'],
+  ]) {
+    const out = extractCodeSnippet(stem, python);
+    equal(`nothing is lifted from ${note}`, out.code_snippet, null);
+    equal(`and the stem is unchanged for ${note}`, out.question, stem);
+  }
+
+  // A model may supply the program directly; that always wins.
+  const supplied = normaliseQuestion(
+    { type: 'radio', question: 'What does this program print?', code_snippet: 'print(1 + 1)', options: ['1', '2', '3', '4'], correct_index: 1 },
+    { topic: { id: 't', title: 'Output' }, language: 'python' },
+  );
+  equal('a model-supplied program is kept', supplied.code_snippet, 'print(1 + 1)');
+
+  // Prose is never rewritten on the server, whatever the model sent.
+  const prose = normaliseQuestion(
+    { type: 'radio', question: 'What is 2 + 2?', options: ['3', '4', '5', '6'], correct_index: 1 },
+    { topic: { id: 't', title: 'Arithmetic' }, language: 'python' },
+  );
+  equal('a question with no code keeps its wording', prose.question, 'What is 2 + 2?');
+  equal('and carries no block', prose.code_snippet, undefined);
+}
+{
+  // The payload the form receives has to include the fields, or the client has
+  // nothing to render — this is the failure that is invisible in the engine but
+  // fatal on screen.
+  const question = normaliseQuestion(
+    {
+      type: 'radio',
+      question: 'What is printed?',
+      code_snippet: 'x = 1\nx = 2\nprint(x)',
+      options: ['1', '2', '3', '4'],
+      correct_index: 1,
+    },
+    { topic: { id: 't', title: 'Output' }, language: 'python' },
+  );
+  const form = oneQuestionForm({ question, topic: { title: 'Output' }, index: 1, total: 0, sessionId: 's1' });
+  equal('it is a form component', form.type, 'question_form');
+  const sent = form.questions[0];
+  equal('the form carries the program to the client', sent.code_snippet, 'x = 1\nx = 2\nprint(x)');
+  check('the form still carries the question id', Boolean(sent.id), JSON.stringify(sent.id));
+  check('the form still carries the options', Array.isArray(sent.options) && sent.options.length === 4);
+}
+{
+  // A curated question (no model involved) gets the same treatment.
+  const topic = { id: 't-java', title: 'Variables and Primitive Types', summary: 'int, double, boolean, char.' };
+  const question = localQuestion(topic, { subject: 'Java Programming', language: 'java' });
+  equal('a curated question about code carries a block', question.code_snippet, 'int total = 7;\ntotal = 7.5;');
+  check('its sentence does not restate the program', !question.question.includes('int total = 7;'), question.question);
+  check('the sentence is still a question', /\?\s*$/.test(question.question), question.question);
+}
 /* -------------------------------------------------------------------------- */
 
 console.log(`\n${passed} passed, ${failures.length} failed\n`);
