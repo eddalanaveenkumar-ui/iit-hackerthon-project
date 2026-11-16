@@ -1,11 +1,25 @@
 import bcrypt from 'bcryptjs';
 import { ObjectId } from 'mongodb';
+import config from '../config/index.js';
 import { getDb } from '../db/index.js';
 import { ensureIndexes } from '../db/schema.js';
 import { bootstrapAiCatalog } from '../modules/ai/config-store.js';
 import { triggerSeedWorkflows } from './workflows.js';
 import { JAVA_SYLLABUS, ML_SYLLABUS, WEB_SYLLABUS } from './syllabi.js';
 
+/**
+ * Sample users and classrooms, for tests and deliberate demos only.
+ *
+ * Nothing here runs unless a deployment sets SEED_DEMO=true. It used to default
+ * to on, which put seven accounts sharing one password — one of them an
+ * administrator — into every fresh database, production included. The default is
+ * now off, the login page no longer advertises these accounts, and a fresh
+ * deployment is opened with the administrator account instead (ADMIN_EMAIL /
+ * ADMIN_PASSWORD, created by `ensureAdminAccount`).
+ *
+ * The e2e harnesses turn SEED_DEMO back on because they exercise classroom
+ * membership, permissions and monitoring — flows that need populated classrooms.
+ */
 const DEMO_PASSWORD = 'LearnMate123!';
 
 const DEMO_USERS = [
@@ -241,9 +255,11 @@ export async function runSeed({ force = false } = {}) {
   await ensureIndexes();
   await bootstrapAiCatalog();
 
-  const existing = await db.collection('users').countDocuments();
-  if (existing > 0 && !force) {
-    console.log(`[seed] ${existing} users already present — skipping demo seed`);
+  // Only the *sample* users count as "already seeded". A real signup — which the
+  // e2e suite makes before it signs in — must not disqualify the sample data.
+  const alreadySeeded = await db.collection('users').countDocuments({ email: { $in: DEMO_USERS.map((u) => u.email) } });
+  if (alreadySeeded > 0 && !force) {
+    console.log(`[seed] ${alreadySeeded} demo users already present — skipping demo seed`);
     return { seeded: false };
   }
   if (force) {
@@ -377,10 +393,71 @@ export async function runSeed({ force = false } = {}) {
   };
 }
 
-export async function ensureSeed() {
+/**
+ * Create the administrator account if it is missing.
+ *
+ * This replaces the seeded demo users. The account comes from the environment:
+ *
+ *   ADMIN_EMAIL      default admin@gmail.com
+ *   ADMIN_PASSWORD   default adimin
+ *
+ * An existing account with that email is left alone — its password is not
+ * reset on every boot, so changing it in the app survives a restart. The role is
+ * only ever raised, never lowered, for the configured address.
+ *
+ * The defaults are weak on purpose (this is what the operator asked to sign in
+ * with), so a deployment should set ADMIN_PASSWORD. Nothing else in the product
+ * is exposed by this account beyond what any signed-in user gets, plus the AI
+ * configuration page.
+ */
+export async function ensureAdminAccount() {
+  const email = config.adminEmail;
+  const password = config.adminPassword;
   const db = getDb();
-  const users = await db.collection('users').countDocuments();
-  if (users === 0) {
+
+  const existing = await db.collection('users').findOne({ email });
+  if (existing) {
+    if (existing.role !== 'admin') {
+      await db.collection('users').updateOne({ _id: existing._id }, { $set: { role: 'admin', updatedAt: new Date() } });
+      console.log(`[seed] promoted ${email} to administrator`);
+    }
+    return { created: false, email };
+  }
+
+  const passwordHash = await bcrypt.hash(password, 10);
+  await db.collection('users').insertOne({
+    name: 'Administrator',
+    email,
+    passwordHash,
+    avatarColor: '#b45309',
+    role: 'admin',
+    headline: 'Platform administrator',
+    preferences: { theme: 'light', notifications: true },
+    lastActiveAt: new Date(),
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  console.log(`[seed] administrator account ready: ${email}`);
+  return { created: true, email };
+}
+
+export async function ensureSeed() {
+  // Demo content is off (see DEMO_CONTENT_ENABLED). The administrator account is
+  // still created, because without it the deployment has no way in except
+  // self-registration.
+  await ensureAdminAccount();
+
+  // Demo content only when a deployment explicitly asks for it (SEED_DEMO=true).
+  // It exists for the test harnesses and for a deliberate local demo — never for
+  // a deployment that did not request it.
+  if (!config.seedDemo) return { seeded: false, credentials: [] };
+
+  // Count the *seeded* users, not users in general. A signup that happened
+  // before the first seed used to disqualify the sample data entirely, which is
+  // why this suite could pass one run and fail the next.
+  const db = getDb();
+  const seeded = await db.collection('users').countDocuments({ email: { $in: DEMO_USERS.map((u) => u.email) } });
+  if (seeded === 0) {
     await runSeed();
   }
 }

@@ -33,6 +33,9 @@ const server = spawn(process.execPath, ['src/index.js'], {
     // minute, which is more than a real learner generates. Raise the ceiling for
     // the test run only, so a legitimate limit does not read as a broken app.
     AI_RATE_LIMIT_MAX: '10000',
+    // Demo content is off by default everywhere else; the suites exercise
+    // classroom membership and permissions, so they ask for the sample data
+    // explicitly here. This is the only place it is still switched on.
     SEED_DEMO: 'true',
     JWT_SECRET: 'e2e-secret-key-0123456789-0123456789',
     SECRET_ENCRYPTION_KEY: 'e2e-encryption-key-0123456789-0123456789',

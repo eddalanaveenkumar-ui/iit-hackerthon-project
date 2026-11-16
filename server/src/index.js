@@ -11,7 +11,9 @@ async function main() {
   await ensureIndexes();
   await bootstrapAiCatalog();
 
-  if (config.seedDemo) {
+  // The administrator account is unconditional — without it a fresh deployment
+  // has no way in. Demo content is separate and off unless SEED_DEMO=true.
+  {
     const { ensureSeed } = await import('./seed/seed.js');
     await ensureSeed();
   }
