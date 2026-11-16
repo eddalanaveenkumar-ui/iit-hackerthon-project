@@ -208,7 +208,13 @@ function multipleChoice(topic, { attempt = 1, summary = '', language = null } = 
     // form: the sentence is then written to be read *with* the block above it
     // ("This Java program does not compile. What is the reason?") instead of
     // pointing at code that has been moved out from under it.
-    const authorCode = typeof fact.code === 'string' && fact.code.trim() ? fact.code.trim().slice(0, 2000) : null;
+    // The program shown *with* the question is `prompt`, which deliberately does
+    // not run to an answer: "What does this print?" followed by a program that
+    // prints the answer is not a question. `code` is the full run, and it is what
+    // the post-answer worked example uses (`explainMistake`). A fact may have
+    // either, both, or neither.
+    const shownAtAsk = [fact.prompt, fact.code].find((c) => typeof c === 'string' && c.trim());
+    const authorCode = shownAtAsk ? shownAtAsk.trim().slice(0, 2000) : null;
     const snippet = authorCode
       ? { code_snippet: authorCode, inline: null }
       : extractCodeSnippet(fact.ask, { type: 'radio', language: fact.lang || language });
@@ -375,6 +381,7 @@ Rules:
 - Do not reveal the answer in the question.
 - Keep the question under 300 characters.
 - STAY IN ONE LANGUAGE. ${language ? `This syllabus is ${LANGUAGE_NAMES[language] || language}; write every code sample in ${LANGUAGE_NAMES[language] || language} and use its real syntax.` : 'Use one language consistently.'} Never mix two languages in the same snippet, and never ask about another language's behaviour — "what happens in Python?" is wrong on a Java syllabus.
+- A code sample goes in its own field, never inside the question sentence: put the program in "code_snippet" (real newlines and indentation) and ask about it in "question" (for example "What does this program print?"). Backticks inside the sentence are only for short inline terms like \`None\` or \`7 // 2\`. Never write a whole program into the question sentence, and never put a program on a single line with its statements run together.
 - A code sample must be something the learner could actually type and run. Do not invent syntax that would not execute: \`x = 10; x = 'hello'; x = 3.14\` is valid in neither Python nor Java. If you cannot write it correctly, ask in prose instead.
 - ${codeRunnable
     ? 'Code questions are executed and graded against their expected output.'
@@ -397,6 +404,157 @@ Return ONLY JSON:
   }).catch(() => ({ data: null }));
 
   return normaliseQuestion(data, fallback, topic);
+}
+
+/**
+ * Keywords that belong to a program rather than to the sentence around it.
+ * Matched as whole words, so "format" does not look like "for" and "classify"
+ * does not look like "class".
+ */
+const CODE_WORDS = /\b(?:if|elif|else|for|while|print|def|return|class|public|private|static|void|int|double|float|boolean|char|String|var|let|const|function|import|from|range|len|input|str|list|dict|None|True|False|null|nil|System\.out|console\.log|echo|select|where|try|except|catch|finally|switch|case|break|continue|with|lambda|super|this)\b/;
+const INDENT_START = /^(?:\s*(?:if|elif|else|for|while|try|except|finally|def|class|switch|case|with)\b)/;
+const PROSE_TAIL = /\?\s*$/;
+
+const collapseSpaces = (s) => String(s).replace(/[ \t]+/g, ' ').trim();
+
+/**
+ * Lay a one-line program out as a program.
+ *
+ * A model will happily send "x = 7 if x > 10: print('A') elif x > 5: print('B')
+ * else: print('C')" — correct Python, and unreadable as a sentence. Python's
+ * grammar gives exactly three shapes, and each one starts a new line:
+ *
+ *   the colon that opens a suite          "if x > 10:"        -> newline
+ *   a keyword that starts a new clause    "elif", "else", ... -> newline
+ *   a semicolon between statements        "a = 1; b = 2"      -> newline
+ *
+ * Braced languages (Java, JavaScript) have no colon form, so for them a semicolon
+ * is the only split. The body of a suite is indented one level; a keyword at the
+ * outer level closes it.
+ *
+ * This only runs on a single line whose caller has already decided it is code —
+ * it never rewrites prose.
+ */
+function layoutOneLiner(oneLine, language = 'python') {
+  const lang = String(language || 'python').toLowerCase();
+  const braced = ['java', 'javascript', 'c', 'cpp', 'csharp', 'go', 'rust', 'typescript'].includes(lang);
+  const trimmed = oneLine.trim();
+  if (!trimmed) return '';
+
+  // 1. Cut into logical lines. In Python a suite opens at ":" and a new clause
+  //    starts at elif/else/except/finally; in a braced language only ";"
+  //    separates statements.
+  const chunks = [];
+  let buffer = '';
+  let quote = null;
+
+  const pushChunk = () => {
+    if (buffer.trim()) chunks.push(buffer);
+    buffer = '';
+  };
+
+  for (let i = 0; i < trimmed.length; i += 1) {
+    const ch = trimmed[i];
+
+    if (quote) {
+      buffer += ch;
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      buffer += ch;
+      continue;
+    }
+    if (ch === ';') {
+      // Java/JS statements end in ";", so it belongs to the program. In Python
+      // it is only a separator between statements and can go.
+      if (braced) buffer += ch;
+      pushChunk();
+      continue;
+    }
+    if (ch === ':' && !braced) {
+      buffer += ch;
+      // "x = 7 if x > 10:" is an assignment run into a condition — the model
+      // wrote two statements as one. Split before the "if" so the block shows
+      // the program it meant.
+      const glued = /^([A-Za-z_]\w*\s*=\s*.+?)\s+if\s+([\s\S]+)$/.exec(buffer.replace(/:\s*$/, ''));
+      if (glued) {
+        chunks.push(glued[1]);
+        buffer = `if ${glued[2]}:`;
+      }
+      pushChunk();
+      continue;
+    }
+    // A clause keyword begins a new logical line even without punctuation.
+    if (/\s/.test(trimmed[i - 1] || '') && !braced) {
+      const rest = trimmed.slice(i);
+      const clause = /^(elif|else|except|finally)(?![\w])/.exec(rest);
+      if (clause && buffer.trim()) {
+        pushChunk();
+        // fall through: this character starts the new chunk
+        buffer += ch;
+        continue;
+      }
+    }
+    buffer += ch;
+  }
+  pushChunk();
+  if (!chunks.length) return '';
+
+  // 2. Indent. A line ending in ":" opens a suite; the matching elif/else sits
+  //    back at the level of the "if" it belongs to.
+  const lines = [];
+  let depth = 0;
+  for (const chunk of chunks) {
+    const piece = collapseSpaces(chunk);
+    if (!piece) continue;
+    const isElseClause = /^(?:else|elif|except|finally|catch)\b/.test(piece);
+    if (isElseClause && depth > 0) depth -= 1;
+    lines.push(`${'    '.repeat(depth)}${piece}`);
+    if (!braced && piece.endsWith(':') && !piece.endsWith('::')) depth += 1;
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Pull the program out of a stem that does not mark it as code.
+ *
+ * Models ignore the instruction to use backticks often enough that keying only on
+ * backticks left whole programs in running text:
+ *
+ *   "What does this code print? x = 7 if x > 10: print('A') elif x > 5: print('B')"
+ *
+ * So identify the program by its shape instead: the question starts with prose,
+ * and from some word onwards the rest of the string is program. The split is only
+ * accepted when the tail really looks like code — it carries code keywords and is
+ * either punctuated like a statement or long enough that it cannot be prose.
+ * Anything doubtful is left alone; a missing block is a cosmetic problem, a
+ * mangled question is a wrong question.
+ */
+function extractBareCode(text, { language = 'python' } = {}) {
+  const match = /^(.*?\?)\s+(.*)$/s.exec(text);
+  // "What does this code print? <program>" — prose, then program. A stem with no
+  // question mark is not this shape; leave it to the backtick path.
+  if (!match) return { question: text, code_snippet: null };
+
+  const instruction = match[1].trim();
+  const tail = match[2].trim();
+  if (tail.length < 12) return { question: text, code_snippet: null };
+  if (tail.includes('`')) return { question: text, code_snippet: null };
+
+  const codeish = [
+    CODE_WORDS.test(tail),
+    /[=:;{}()[\]]/.test(tail),
+    tail.includes('\n') || tail.length >= 16,
+  ].filter(Boolean).length;
+  if (codeish < 3) return { question: text, code_snippet: null };
+  // A tail that is still asking something is prose that happens to mention code.
+  if (PROSE_TAIL.test(tail) && !/[:;{}]\s*$/.test(tail)) return { question: text, code_snippet: null };
+
+  const code = tail.includes('\n') ? tail : layoutOneLiner(tail, language);
+  if (!code || code.length < 8) return { question: text, code_snippet: null };
+  return { question: instruction, code_snippet: code.slice(0, 2000) };
 }
 
 /**
@@ -427,7 +585,9 @@ Return ONLY JSON:
 export function extractCodeSnippet(question, { type, language = null } = {}) {
   const text = String(question || '');
   const aboutCode = type === 'code_input' || Boolean(language);
-  if (!aboutCode || !text) return { question: text, code_snippet: null, inline: null };
+  const bare = extractBareCode(text, { language });
+  if (!aboutCode || !text) return { question: text, code_snippet: null, inline: null, ...bare };
+  if (bare.code_snippet) return { question: bare.question, code_snippet: bare.code_snippet, inline: null };
 
   const spans = [...text.matchAll(/`([^`]{1,400})`/g)].map((m) => ({ raw: m[0], code: m[1].trim(), index: m.index }));
   if (!spans.length) return { question: text, code_snippet: null, inline: null };
@@ -502,7 +662,10 @@ export function normaliseQuestion(raw, fallback, topic) {
     : extractCodeSnippet(question, { type, language: raw.language || fallback.language || null });
   const out = {
     id: `q${encoder()}`,
-    question: question.slice(0, 400),
+    // `snippet.question` is the cleaned stem — when the program was pulled out of
+    // the sentence, this is the sentence without it. It is otherwise the model's
+    // wording, untouched.
+    question: String(snippet.question || question).slice(0, 400),
     type,
     hint: raw.hint ? String(raw.hint).slice(0, 240) : fallback.hint,
     source: 'model',

@@ -74,11 +74,13 @@ export const FACTS = [
     lang: 'python',
     match: /operators? (and|&) expressions?|arithmetic operators?|expressions?/,
     label: 'Operators and expressions',
-    ask: 'What does `7 // 2` evaluate to in Python 3?',
+    ask: 'What is the value of `result`?',
     answer: '3 — floor division discards the remainder',
     wrong: ['3.5 — it is ordinary division', '4 — it rounds to the nearest whole number', '1 — it returns the remainder'],
     explain: '`//` floors toward negative infinity, so 7 // 2 is 3. Ordinary division `7 / 2` is 3.5.',
-    code: 'print(7 // 2)',
+    // Shown with the question: the expression, not its value. The full run
+    // (`code`) still prints 3 for the post-answer explanation.
+    prompt: 'result = 7 // 2',
     print: '3',
   },
   {
@@ -98,7 +100,7 @@ export const FACTS = [
     lang: 'python',
     match: /conditionals?|if statements?|branching|decision/,
     label: 'Conditionals',
-    ask: 'What does this print?\n`x = 0` then `if x: print("yes") else: print("no")`',
+    ask: 'What is the value of `result` after this runs?',
     answer: 'no — 0 is falsy, and an `if` tests truthiness, not existence',
     wrong: [
       'yes — the variable exists, so the branch is taken',
@@ -106,7 +108,9 @@ export const FACTS = [
       'Nothing — the `else` branch only runs when the variable is undefined',
     ],
     explain: '0, "", [] and None are falsy in Python. `if x` tests the value, not whether x is defined.',
-    code: 'x = 0\nprint("yes" if x else "no")',
+    // The branches are shown, the outcome is not: printing from inside either
+    // one would put the answer on screen whichever way it went.
+    prompt: 'x = 0\nif x:\n    result = "yes"\nelse:\n    result = "no"',
     print: 'no',
   },
   {
@@ -143,17 +147,17 @@ export const FACTS = [
     answer: 'None — Python returns None implicitly',
     wrong: ['The last expression evaluated in the function', 'An empty string', 'A ValueError is raised for a missing return'],
     explain: 'Falling off the end of a function returns None. `return` is explicit.',
-    code: 'def f():\n    x = 1\nprint(f())',
+    prompt: 'def f():\n    x = 1',
     print: 'None',
   },
   {
     match: /arguments? (and|&) return|parameters?|return values?|passing arguments/,
     label: 'Arguments and return values',
-    ask: 'What does this print?\n`def add(a, b=2): return a + b` then `print(add(3))`',
+    ask: 'What is the value of `result` after this runs?',
     answer: '5 — b falls back to its default of 2',
     wrong: ['A TypeError, because add expects two arguments', '3 — the missing argument becomes 0', 'TypeError: b is required when a is given'],
     explain: 'A parameter with a default is optional at the call site.',
-    code: 'def add(a, b=2):\n    return a + b\nprint(add(3))',
+    prompt: 'def add(a, b=2):\n    return a + b\n\nresult = add(3)',
     print: '5',
   },
   {

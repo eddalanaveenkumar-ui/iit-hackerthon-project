@@ -98,6 +98,41 @@ describe('a question about code', () => {
   });
 });
 
+describe('a program the model wrote without backticks', () => {
+  // The server finds the program by its shape and returns the instruction as
+  // the stem, with the program laid out. The learner must see the block, and
+  // must not see the program in the sentence any more.
+  const question = {
+    question: 'What does this code print?',
+    code_snippet: "x = 7\nif x > 10:\n    print('A')\nelif x > 5:\n    print('B')\nelse:\n    print('C')",
+    language: 'python',
+  };
+
+  it('shows the program as a block with one statement per line', () => {
+    const { container } = render(<QuestionFormRenderer component={form(question)} actions={actions} />);
+    const pre = container.querySelector('pre');
+    expect(pre).toBeTruthy();
+    /**
+     * Only the *code* lines belong in the block. The line-number column is
+     * `aria-hidden` but still text, so count the code column specifically.
+     */
+    const codeLines = [...pre.querySelectorAll('code > span > span:last-child')].map((s) => s.textContent);
+    expect(codeLines).toEqual(['x = 7', 'if x > 10:', "    print('A')", 'elif x > 5:', "    print('B')", 'else:', "    print('C')"]);
+  });
+
+  it('keeps the instruction readable and separate', () => {
+    const { container } = render(<QuestionFormRenderer component={form(question)} actions={actions} />);
+    const label = container.querySelector('ol li label');
+    expect(label.textContent).toContain('What does this code print?');
+    expect(label.textContent).not.toContain('print(');
+  });
+
+  it('labels the block as Python', () => {
+    render(<QuestionFormRenderer component={form(question)} actions={actions} />);
+    expect(screen.getByText('Python')).toBeTruthy();
+  });
+});
+
 describe('a question with no code', () => {
   it('renders the sentence exactly as written', () => {
     const { container } = render(

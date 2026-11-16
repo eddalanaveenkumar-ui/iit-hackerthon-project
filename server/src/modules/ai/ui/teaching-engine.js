@@ -1,5 +1,8 @@
 import { z } from 'zod';
 import { UI_LIMITS, fallbackTextDocument, parseUiDocument, repairUiDocument, cleanText } from './protocol.js';
+// A lesson may ask a question about a program just as TRACS does, so the same
+// lifting applies: the program becomes its own block instead of running text.
+import { extractCodeSnippet } from '../../tracs/engine.js';
 
 /**
  * EDUCATIONAL TUTORIAL ENGINE
@@ -772,6 +775,25 @@ export function authorTutorial({ raw, question = '', concept = null, level = '',
     if (isComponentAllowed(component, { subject: analysis.subject, wantsCode: analysis.wantsCode })) kept.push(component);
     else dropped.push({ path: `components.${component.id}`, message: `"${component.type}" is not part of a ${analysis.subject} lesson` });
   }
+  // Lift any program out of a question stem into its own field, so the renderer
+  // can show it as a block. A lesson question such as "After `a = 5; b = a;
+  // a = 6`, what is `b`?" has the same readability problem as a TRACS question,
+  // and the same fix applies. Stems without code are returned untouched.
+  for (const component of kept) {
+    if (component.type !== 'question_form' || !Array.isArray(component.questions)) continue;
+    component.questions = component.questions.map((q) => {
+      if (!q || typeof q.question !== 'string') return q;
+      const snippet = extractCodeSnippet(q.question, { type: q.type, language: q.language || concept?.language || null });
+      if (!snippet.code_snippet) return q;
+      return {
+        ...q,
+        question: snippet.question,
+        code_snippet: snippet.code_snippet,
+        ...(snippet.inline ? { code_inline: snippet.inline } : {}),
+      };
+    });
+  }
+
   const components = kept.slice(0, UI_LIMITS.maxComponents);
 
   // Skeleton enforcement: a tutorial that never asks the student anything is a
