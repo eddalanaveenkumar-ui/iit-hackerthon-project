@@ -38,7 +38,8 @@ import {
   extractCodeSnippet,
   CHECK_COUNT,
 } from '../src/modules/tracs/engine.js';
-import { factsFor, languageFor } from '../src/modules/tracs/question-bank.js';
+import { spawnSync } from 'node:child_process';
+import { FACTS, factsFor, languageFor } from '../src/modules/tracs/question-bank.js';
 import { isRuntimeAvailable, resetRuntimeCache, runtimeAvailability } from '../src/utils/sandbox.js';
 import { parseUiDocument } from '../src/modules/ai/ui/protocol.js';
 
@@ -1048,6 +1049,122 @@ section('a deployment without Python does not set ungradeable questions');
   equal('a curated question about code carries a block', question.code_snippet, 'int total = 7;\ntotal = 7.5;');
   check('its sentence does not restate the program', !question.question.includes('int total = 7;'), question.question);
   check('the sentence is still a question', /\?\s*$/.test(question.question), question.question);
+}
+
+/* -------------------------------------------------------------------------- */
+/* CODE WITH NO BACKTICKS                                                     */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The first version of the lifting only looked inside backticks. Real output
+ * then arrived like this, as one line of running text:
+ *
+ *   What does this code print? x = 7 if x > 10: print('A') elif x > 5: print('B') else: print('C')
+ *
+ * and the learner still had to read a program out of a paragraph. Models ignore
+ * the "use backticks" instruction often enough that the program has to be found
+ * by its shape instead.
+ *
+ * Two things are being pinned here: the program is found and laid out as a
+ * program, and prose that merely mentions code is still left completely alone.
+ */
+{
+  // The exact stem a learner reported.
+  const stem = "What does this code print? x = 7 if x > 10: print('A') elif x > 5: print('B') else: print('C')";
+  const out = extractCodeSnippet(stem, { type: 'radio', language: 'python' });
+  equal(
+    'a one-line program is laid out with one statement per line',
+    out.code_snippet,
+    "x = 7\nif x > 10:\n    print('A')\nelif x > 5:\n    print('B')\nelse:\n    print('C')",
+  );
+  equal('and the sentence keeps only the instruction', out.question, 'What does this code print?');
+  check('nothing is left inline', out.inline === null, JSON.stringify(out.inline));
+
+  // The program has to be *correct*, not merely split. It is parsed and run.
+  const parsed = spawnSync('python3', ['-c', 'import ast,sys; ast.parse(sys.stdin.read())'], {
+    input: out.code_snippet,
+    encoding: 'utf8',
+  });
+  equal('the laid-out program is valid Python', parsed.status, 0);
+  const ran = spawnSync('python3', ['-c', out.code_snippet], { input: '', encoding: 'utf8' });
+  equal('and it prints the answer the one-liner meant', String(ran.stdout).trim(), 'B');
+}
+{
+  // A model that already used newlines must not be re-flowed.
+  const multi = "What does this code print?\nx = 7\nif x > 10:\n    print('A')\nelse:\n    print('C')";
+  const out = extractCodeSnippet(multi, { type: 'radio', language: 'python' });
+  equal('an already-laid-out program is kept as written', out.code_snippet, "x = 7\nif x > 10:\n    print('A')\nelse:\n    print('C')");
+  equal('and the instruction is separated from it', out.question, 'What does this code print?');
+}
+{
+  // Braced languages: ";" stays, and no Python-style indentation is invented.
+  const java = 'What does this Java program print? int x = 7; if (x > 10) System.out.println("A"); else System.out.println("B");';
+  const out = extractCodeSnippet(java, { type: 'radio', language: 'java' });
+  const javaCode = String(out.code_snippet || '');
+  check('a Java one-liner is split at its semicolons', javaCode.split('\n').length >= 3, javaCode);
+  check('and keeps its semicolons', javaCode.includes('int x = 7;'), javaCode);
+}
+{
+  // Prose is never rewritten just because it mentions code. Each of these was
+  // checked by hand: none of them is a program, and splitting any of them would
+  // produce a worse question than the one we started with.
+  for (const prose of [
+    'What does `7 // 2` evaluate to in Python 3?',
+    'How many times does `for i in range(3)` run its body?',
+    'Which statement about `None` is correct?',
+    'In Java, what is the value of 7 / 2 when both operands are int?',
+    "Why is a variable's type declared once, and what does that mean for reassignment?",
+    'What is the difference between a list and a tuple in Python?',
+    'Fill in the blank: 7 // 2 evaluates to ___ in Python.',
+  ]) {
+    const out = extractCodeSnippet(prose, { type: 'radio', language: 'python' });
+    equal(`prose is left alone: ${prose.slice(0, 40)}…`, out.code_snippet, null);
+    equal('and its wording is unchanged', out.question, prose);
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* A QUESTION MUST NOT SHOW ITS OWN ANSWER                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Showing a program with the question made an old problem visible: several
+ * curated facts demonstrated the answer *in the snippet*. "What does this
+ * print?" followed by `print("yes" if x else "no")` is not a question.
+ *
+ * So a fact's program comes in two parts: `prompt` is what the learner sees while
+ * answering and must not produce the answer, and `code` is the full run used by
+ * the post-answer worked example. A fact with no `prompt` falls back to `code`.
+ *
+ * This walks every curated fact — not just the ones that happened to be wrong
+ * today — so a new fact with a leaking snippet is caught when it is added.
+ */
+{
+  const all = FACTS;
+  let checked = 0;
+
+  for (const fact of all) {
+    if (!fact || typeof fact !== 'object') continue;
+    const shown = fact.prompt || fact.code;
+    if (typeof shown !== 'string' || !shown.trim()) continue;
+    if ((fact.lang || 'python') !== 'python') continue;
+    checked += 1;
+
+    // 1. What the learner sees while answering must be valid code on its own.
+    const parsed = spawnSync('python3', ['-c', 'import ast,sys; ast.parse(sys.argv[1])', shown], { encoding: 'utf8' });
+    equal(`the program shown for "${fact.label}" is valid Python`, parsed.status, 0);
+
+    // 2. It must not print the answer. Compared against the answer's leading
+    //    token, because curated answers read "no — 0 is falsy" / "3 — floor…".
+    const lead = String(fact.answer || '').trim().split(/[\s—,.]/)[0].trim();
+    if (!lead) continue;
+    const ran = spawnSync('python3', ['-c', shown], { input: '', encoding: 'utf8', timeout: 5000 });
+    const printed = String(ran.stdout || '').split('\n').map((l) => l.trim()).filter(Boolean);
+    const reveals = printed.some((line) => line === lead || line.startsWith(`${lead} `));
+    check(`the program shown for "${fact.label}" does not print its own answer`, !reveals, `prints ${JSON.stringify(printed)}, answer starts ${JSON.stringify(lead)}`);
+  }
+
+  check('every curated code question was checked', checked >= 13, `${checked} checked`);
 }
 /* -------------------------------------------------------------------------- */
 
