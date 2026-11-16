@@ -490,6 +490,12 @@ const dynamicQuestion = z.strictObject({
   max: z.number().finite().optional(),
   step: z.number().finite().positive().optional(),
   language: z.enum(['javascript', 'python', 'java', 'sql']).optional(),
+  // The program the question is about, separate from the prose, so it can be
+  // shown in a block instead of inline in a sentence.
+  code_snippet: z.string().max(4000).optional(),
+  // The exact backticked spans it was lifted from. Those are replaced with a
+  // pointer; every other backtick in the sentence is left as it was.
+  code_inline: z.array(z.string().max(500)).max(6).optional(),
   accept: z.array(z.string().max(20)).max(6).optional(),
   // A coding answer is executed, so the author declares the expected result.
   // The client never evaluates it — verification belongs to the server.

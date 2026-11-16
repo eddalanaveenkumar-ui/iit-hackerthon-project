@@ -95,6 +95,8 @@ export function oneQuestionForm({ question, topic, index, total, sessionId }) {
         language: question.language || undefined,
         expected_output: question.expected_output || undefined,
         tests: question.tests || undefined,
+        code_snippet: question.code_snippet || undefined,
+        code_inline: question.code_inline || undefined,
         min: question.min,
         max: question.max,
         step: question.step,
@@ -198,6 +200,18 @@ function multipleChoice(topic, { attempt = 1, summary = '', language = null } = 
 
   if (fact) {
     const options = shuffleStable([fact.answer, ...fact.wrong].slice(0, 4), topic?.title || '');
+    // Curated questions carry code too ("In `int total = 7; total = 7.5;`, what
+    // happens?"). Lift it into its own field so it renders as a block here as
+    // well — otherwise only model-authored questions would get the treatment.
+    //
+    // A fact may also state its program outright (`code`). That is the better
+    // form: the sentence is then written to be read *with* the block above it
+    // ("This Java program does not compile. What is the reason?") instead of
+    // pointing at code that has been moved out from under it.
+    const authorCode = typeof fact.code === 'string' && fact.code.trim() ? fact.code.trim().slice(0, 2000) : null;
+    const snippet = authorCode
+      ? { code_snippet: authorCode, inline: null }
+      : extractCodeSnippet(fact.ask, { type: 'radio', language: fact.lang || language });
     return {
       question: fact.ask,
       options,
@@ -205,6 +219,9 @@ function multipleChoice(topic, { attempt = 1, summary = '', language = null } = 
       hint: `Think about how ${fact.label.toLowerCase()} actually behaves, not what it sounds like it should do.`,
       explanation: fact.explain,
       source: 'local',
+      ...(snippet.code_snippet
+        ? { code_snippet: snippet.code_snippet, ...(snippet.inline ? { code_inline: snippet.inline } : {}) }
+        : {}),
     };
   }
 
@@ -383,6 +400,88 @@ Return ONLY JSON:
 }
 
 /**
+ * Find the program a question is about, so it can be shown as a program.
+ *
+ * A question like
+ *
+ *   After executing `x = 10; x = 'hello'; x = 3.14`, what is the type of `x`?
+ *
+ * carries its code inside backticks in the middle of a sentence. Rendered as
+ * running text that is a syntax soup to decode; rendered as a block it is a
+ * program, which is the thing being asked about.
+ *
+ * The *prose is never rewritten*. Cutting a clause out of a sentence produced
+ * "What does evaluate to in Python 3?", which is not a question. Instead the
+ * snippet is lifted alongside the untouched text, and the renderer shows the code
+ * above the sentence and points at it ("the code above"). Both halves stay
+ * grammatical and the code stays readable.
+ *
+ * Only substantial code is lifted — more than one statement, or a span long
+ * enough that reading it inline is work. A short expression like `7 // 2` reads
+ * perfectly well in a sentence and is left alone.
+ *
+ * @returns {{ question: string, code_snippet: string|null, inline: string|null }}
+ *          `inline` is the exact backticked text that was lifted, so the renderer
+ *          can swap that one span for a reference and leave every other span.
+ */
+export function extractCodeSnippet(question, { type, language = null } = {}) {
+  const text = String(question || '');
+  const aboutCode = type === 'code_input' || Boolean(language);
+  if (!aboutCode || !text) return { question: text, code_snippet: null, inline: null };
+
+  const spans = [...text.matchAll(/`([^`]{1,400})`/g)].map((m) => ({ raw: m[0], code: m[1].trim(), index: m.index }));
+  if (!spans.length) return { question: text, code_snippet: null, inline: null };
+
+  // Substantial = more than one statement, or long enough that a sentence cannot
+  // carry it. Everything else is a term or a short expression and stays inline.
+  const substantial = (c) => c.includes('\n') || /;\s*\S/.test(c) || c.length >= 28;
+
+  let best = null;
+  for (const span of spans) {
+    if (!substantial(span.code)) continue;
+    const score = span.code.length;
+    if (!best || score > best.code.length) best = span;
+  }
+  // Also consider a run of nearby spans that together form one program. Curated
+  // questions write it two ways: `x = 10; x = 'hello'` in one span, or
+  // `int total = 7;` and later `total = 7.5;` in two. The second only reads as a
+  // program when both halves are shown together, so collect the runs.
+  const partOfProgram = (c) => substantial(c) || /[=()]/.test(c);
+  for (let i = 0; i < spans.length; i += 1) {
+    const run = [spans[i]];
+    for (let j = i + 1; j < spans.length && j <= i + 3; j += 1) {
+      const gap = text.slice(spans[j - 1].index + spans[j - 1].raw.length, spans[j].index);
+      // Only a short joining phrase ("and later", ", then") may sit between them.
+      if (gap.length > 24) break;
+      run.push(spans[j]);
+    }
+    if (run.length < 2) continue;
+    if (!run.every((span) => partOfProgram(span.code))) continue;
+    // Join the fragments themselves — never the prose between them ("and later").
+    const code = run.map((span) => span.code).join('\n');
+    if (!substantial(code) && code.length < 12) continue;
+    if (!best || code.length > best.code.length) {
+      best = {
+        raw: text.slice(run[0].index, run[run.length - 1].index + run[run.length - 1].raw.length),
+        code,
+        index: run[0].index,
+        inline: run.map((span) => span.raw),
+      };
+    }
+  }
+  if (!best) return { question: text, code_snippet: null, inline: null };
+
+  const code = String(best.code || best.raw.replace(/`/g, '')).trim();
+  if (code.length < 4) return { question: text, code_snippet: null, inline: null };
+  return {
+    question: text,
+    code_snippet: code.slice(0, 2000),
+    // The exact spans lifted, so the renderer replaces those and only those.
+    inline: best.inline ? best.inline : [best.raw],
+  };
+}
+
+/**
  * Make a model-authored question safe to render and possible to grade.
  *
  * A question whose type the form does not support, or a multiple choice with no
@@ -398,6 +497,9 @@ export function normaliseQuestion(raw, fallback, topic) {
   // Accept both the protocol name and the friendlier alias a model may use.
   const requested = MODEL_TO_PROTOCOL[raw.type] || raw.type;
   const type = QUESTION_TYPES.includes(requested) ? requested : fallback.type;
+  const snippet = raw.code_snippet
+    ? { code_snippet: String(raw.code_snippet).slice(0, 2000), inline: null }
+    : extractCodeSnippet(question, { type, language: raw.language || fallback.language || null });
   const out = {
     id: `q${encoder()}`,
     question: question.slice(0, 400),
@@ -406,6 +508,10 @@ export function normaliseQuestion(raw, fallback, topic) {
     source: 'model',
     topic: topic?.title,
   };
+  // The program the question is about, kept as its own field so the renderer can
+  // put it in a block instead of leaving it inline in a sentence.
+  if (snippet.code_snippet) out.code_snippet = snippet.code_snippet;
+  if (snippet.inline) out.code_inline = snippet.inline;
 
   if (type === 'radio' || type === 'select') {
     const options = (Array.isArray(raw.options) ? raw.options : []).map((o) => String(o).slice(0, 200)).filter(Boolean).slice(0, 6);

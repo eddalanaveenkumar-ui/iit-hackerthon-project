@@ -12,6 +12,7 @@ import { useDynamicActions, useSafeToast } from '../DynamicContext';
 import { QUESTION_LABELS } from '../schemas/uiSchema';
 import { sanitizeAnswers } from '../utils/validateUI';
 import { Empty, Panel } from './shared';
+import CodeBlock from './CodeBlock';
 import { Spinner, cx } from '../../ui';
 
 /**
@@ -41,6 +42,89 @@ import { Spinner, cx } from '../../ui';
  */
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
+
+/**
+ * The question's prose, with the code it references pulled out above it.
+ *
+ * A question like "After executing `x = 10; x = 'hello'`, what is the type of
+ * `x`?" is unreadable as running text. The server lifts the program into
+ * `code_snippet` and reports which spans it came from (`code_inline`), so those
+ * exact spans become a pointer — "the code above" — while every other backtick in
+ * the sentence stays inline as a term.
+ *
+ * The prose itself is never rewritten by the server; the swap happens here, where
+ * the sentence can be rendered as parts rather than as a string.
+ */
+function QuestionPrompt({ question, codeId }) {
+  const text = String(question?.question || '');
+  const lifted = Array.isArray(question?.code_inline) ? question.code_inline.filter(Boolean) : [];
+
+  const parts = useMemo(() => {
+    if (!lifted.length) return null;
+    // Split on the exact lifted spans, longest first so a span that contains
+    // another is not cut in half.
+    const ordered = [...lifted].sort((a, b) => b.length - a.length);
+    let segments = [{ text, lifted: false }];
+    for (const span of ordered) {
+      const next = [];
+      for (const segment of segments) {
+        if (segment.lifted || !segment.text.includes(span)) {
+          next.push(segment);
+          continue;
+        }
+        const bits = segment.text.split(span);
+        bits.forEach((bit, i) => {
+          if (bit) next.push({ text: bit, lifted: false });
+          if (i < bits.length - 1) next.push({ text: span, lifted: true });
+        });
+      }
+      segments = next;
+    }
+
+    // Collapse runs. Two lifted spans joined by a short connective ("and
+    // later", ", then") are one program, so one pointer:
+    //   "Java has `int total = 7;` and later `total = 7.5;`. What happens?"
+    //     -> "Java has the code above. What happens?"
+    // Without this the sentence reads "Java has the code above and later the
+    // code above", which is worse than what we started with.
+    const collapsed = [];
+    for (const segment of segments) {
+      const previous = collapsed[collapsed.length - 1];
+      if (
+        segment.lifted
+        && previous
+        && !previous.lifted
+        && previous.text.trim().length < 24
+        && collapsed.length >= 2
+        && collapsed[collapsed.length - 2].lifted
+      ) {
+        collapsed.pop();
+        continue;
+      }
+      collapsed.push(segment);
+    }
+    return collapsed;
+  }, [text, lifted]);
+
+  if (!parts) return text;
+
+  return (
+    <>
+      {parts.map((part, index) => (part.lifted ? (
+        <a
+          key={index}
+          href={`#${codeId}`}
+          className="mx-0.5 rounded bg-slate-100 px-1 py-0.5 font-mono text-[11.5px] font-normal text-slate-600 no-underline dark:bg-slate-800 dark:text-slate-300"
+        >
+          the code above
+        </a>
+      ) : (
+        <span key={index}>{part.text}</span>
+      )))}
+    </>
+  );
+}
+
 const DEFAULT_ACCEPT = ['image/png', 'image/jpeg', 'image/webp', 'application/pdf'];
 
 function normaliseOptions(options = []) {
@@ -622,7 +706,7 @@ export default function QuestionFormRenderer({ component, embedded = false, onFo
                   <div className="flex items-start justify-between gap-2">
                     <label id={`${fieldId}-label`} htmlFor={fieldId} className="block text-sm font-medium text-slate-800 dark:text-slate-100">
                       <span className="mr-1.5 text-xs tabular-nums text-slate-400">{index + 1}.</span>
-                      {question.question}
+                      <QuestionPrompt question={question} codeId={`${fieldId}-code`} />
                       {question.required === true ? (
                         <span className="ml-1 text-rose-500" aria-hidden>
                           *
@@ -635,6 +719,14 @@ export default function QuestionFormRenderer({ component, embedded = false, onFo
                       {QUESTION_LABELS[question.type] || question.type}
                     </span>
                   </div>
+
+                  {/* The program, in a block, above the answer control and
+                      below the sentence that refers to it. */}
+                  {question.code_snippet ? (
+                    <div id={`${fieldId}-code`}>
+                      <CodeBlock code={question.code_snippet} language={question.language} />
+                    </div>
+                  ) : null}
 
                   {question.description ? (
                     <p id={`${fieldId}-desc`} className="text-[11.5px] leading-snug text-slate-500 dark:text-slate-400">
