@@ -38,7 +38,7 @@ export async function deleteTracsSession(id) {
  * @param {string} sessionId
  * @param {{ command: 'test'|'learn', answer?: any, question_id?: string, topic_id?: string }} turn
  */
-export async function sendTracsTurn(sessionId, { command, answer, question_id, topic_id } = {}) {
+export async function sendTracsTurn(sessionId, { command, answer, answers, question_id, topic_id } = {}) {
   if (command !== 'test' && command !== 'learn') {
     throw new Error('Only /test and /learn are available here.');
   }
@@ -47,9 +47,25 @@ export async function sendTracsTurn(sessionId, { command, answer, question_id, t
     body: {
       command,
       ...(answer !== undefined ? { answer } : {}),
+      // A whole test round, submitted once. The server grades the set together
+      // and diagnoses it as a round rather than question by question.
+      ...(Array.isArray(answers) && answers.length ? { answers } : {}),
       ...(question_id ? { question_id } : {}),
       ...(topic_id ? { topic_id } : {}),
     },
+  });
+}
+
+/**
+ * Choose the unit to study.
+ *
+ * Set before any question is asked: the chat shows the syllabus and asks which
+ * unit, and the server will not test a topic the learner has not chosen.
+ */
+export async function chooseTracsUnit(sessionId, unit) {
+  return api(`/tracs/${encodeURIComponent(sessionId)}/unit`, {
+    method: 'POST',
+    body: { unit },
   });
 }
 

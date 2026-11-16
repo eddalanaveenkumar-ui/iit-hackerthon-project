@@ -15,6 +15,9 @@ import {
   masteryLabel,
   parseCommand,
   turnSchema,
+  groupTopicsByUnit,
+  syllabusMarkdown,
+  questionsPerRound,
 } from './topics.js';
 import {
   authorQuestion,
@@ -29,7 +32,13 @@ import {
   makeDocument,
   say,
   localExplanation,
+  localQuestion,
   CHECK_COUNT,
+  testRoundForm,
+  authorRound,
+  diagnoseMistake,
+  diagnosisReport,
+  DIAGNOSIS_LABELS,
 } from './engine.js';
 import { languageFor } from './question-bank.js';
 
@@ -75,6 +84,33 @@ function sessionView(session) {
     updatedAt: session.updatedAt,
     stats: session.stats || { answered: 0, correct: 0, topics: 0 },
     open_question: session.openQuestion || null,
+    // The unit the learner is working through, and where that unit stands.
+    // `selected_unit` drives the UI: before it is set the chat shows the syllabus
+    // and asks which unit to study; after it, the chat shows Learn/Test.
+    selected_unit: session.selectedUnit || null,
+    units: groupTopicsByUnit(session.topics || []).map((unit) => ({
+      index: unit.index,
+      title: unit.title,
+      concepts: unit.concepts,
+      // Counted from the concepts themselves so the UI never has to re-derive it.
+      attempts: unit.concepts.reduce((n, c) => n + ((session.topics || []).find((t) => t.id === c.id)?.attempts || 0), 0),
+      mastery: Math.round(
+        unit.concepts.reduce((n, c) => n + ((session.topics || []).find((t) => t.id === c.id)?.mastery || 0), 0)
+        / Math.max(1, unit.concepts.length),
+      ),
+    })),
+    round: session.round
+      ? {
+        number: session.round.number,
+        // How many questions this round asks, and — once submitted — how many
+        // were right. `total` counts questions, not results: an open round has
+        // questions and no results yet, and reporting 0 of 0 read as "you scored
+        // nothing" before anything had been answered.
+        total: (session.round.questions || []).length || (session.round.results || []).length,
+        correct: (session.round.results || []).filter((r) => r.verdict === 'correct').length,
+        open: Boolean(session.round.questions?.length) && !(session.round.results || []).length,
+      }
+      : null,
     topics: (session.topics || []).map((topic) => ({
       id: topic.id,
       title: topic.title,
@@ -179,10 +215,17 @@ router.post(
     const db = getDb();
     const inserted = await db.collection(SESSIONS).insertOne(session);
 
+    // The syllabus, as units of concepts, is returned with the session so the
+    // client can show it before any chat starts — the learner picks a unit from
+    // it rather than being dropped into a question about an arbitrary heading.
+    const unitView = groupTopicsByUnit(topics);
+
     res.status(201).json({
       ok: true,
       session: sessionView({ ...session, _id: inserted.insertedId }),
       files: sources,
+      units: unitView,
+      syllabus_markdown: syllabusMarkdown(unitView),
       commands: ['/test', '/learn'],
     });
   }),
@@ -241,6 +284,309 @@ router.delete(
  * Both branches return `{ document, session, state }` — `document` is an
  * ordinary UI document, which is what the answer is rendered from.
  */
+/* -------------------------------------------------------------------------- */
+/* choosing a unit                                                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The learner picks the unit they want to study.
+ *
+ * Until this is set the session has no topic context, which is why the chat asks
+ * for it rather than guessing: a learner who uploaded a syllabus covering Java
+ * and SQL should not be quizzed on SQL because the parser happened to order it
+ * first.
+ */
+router.post(
+  '/tracs/:id/unit',
+  asyncHandler(async (req, res) => {
+    const data = validate(z.object({ unit: z.string().trim().min(1).max(200) }), req.body || {});
+    const session = await loadSession(req.userId, req.params.id);
+    const units = groupTopicsByUnit(session.topics || []);
+
+    // Match by title, case-insensitively, and also accept "Unit 2".
+    const wanted = data.unit.toLowerCase();
+    const unit = units.find((u) => u.title.toLowerCase() === wanted)
+      || units.find((u) => `unit ${u.index}` === wanted || String(u.index) === wanted);
+
+    if (!unit) throw badRequest('That unit is not in this syllabus. Pick one of the units shown.');
+
+    session.selectedUnit = { title: unit.title, index: unit.index, concepts: unit.concepts.map((c) => c.id) };
+    session.round = null;
+    session.openQuestion = null;
+    session.mode = null;
+    await saveSession(session);
+
+    return res.json({
+      ok: true,
+      unit: { index: unit.index, title: unit.title, concepts: unit.concepts },
+      session: sessionView(session),
+      // The two things the learner can do with a unit, as the UI's buttons.
+      choices: [
+        { id: 'learn', label: 'Learn', hint: 'Explain the concepts, then check them', command: 'learn' },
+        { id: 'test', label: 'Test', hint: 'Skip the explanation and go straight to questions', command: 'test' },
+      ],
+    });
+  }),
+);
+
+/**
+ * Build the next round of questions for the selected unit.
+ *
+ * Called by the turn handler when a unit is chosen, when a round is finished, and
+ * after a re-teach. Kept as a function rather than a route so the round state
+ * cannot drift from the questions actually shown.
+ */
+async function startRound(session, { count = null } = {}) {
+  const units = groupTopicsByUnit(session.topics || []);
+  const selected = session.selectedUnit;
+  if (!selected) throw badRequest('Choose a unit first.');
+
+  const concepts = (session.topics || []).filter((t) => (selected.concepts || []).includes(t.id));
+  if (!concepts.length) throw badRequest('That unit has no concepts to test.');
+
+  const previousNumber = session.round?.number || 0;
+  const number = previousNumber + 1;
+
+  // Rounds after a miss ask more, because the same idea is being probed from more
+  // angles; the very first round is short so the learner is not dropped straight
+  // into an exam.
+  const total = count || questionsPerRound({ concepts: concepts.length, round: number });
+
+  const asked = (session.askedStems || []).slice(-24);
+  const early = await authorRound({
+    concepts,
+    count: total,
+    syllabusExcerptFor: (concept) => excerptFor(session, concept),
+    sessionText: session.syllabusText || '',
+    weakConceptIds: session.round?.missedConceptIds || [],
+    avoid: asked,
+    userId: session.userId,
+    conversationId: String(session._id),
+  });
+
+  if (!early.length) {
+    // Never fail the turn on this: the learner has just answered a round, and a
+    // 400 would throw that away. Fall back to the local bank, which always has
+    // something answerable.
+    for (const concept of concepts) {
+      const fallback = localQuestion(concept, { attempt: 1, language: languageFor(`${session.syllabusText || ''} ${concept.title}`) });
+      if (fallback?.question) early.push({ ...fallback, topicId: concept.id, concept: concept.title });
+      if (early.length >= Math.min(total, concepts.length)) break;
+    }
+  }
+  if (!early.length) throw badRequest('No questions could be written for that unit. Try another unit.');
+
+  session.round = {
+    number,
+    // `questions` is replaced by `results` once the learner submits, so an open
+    // round means questions awaiting answers.
+    questions: early.map((q) => ({ ...q, round: number })),
+    results: [],
+    missedConceptIds: [],
+    startedAt: new Date().toISOString(),
+    total,
+  };
+  session.askedStems = [...(session.askedStems || []), ...early.map((q) => String(q.question || '').slice(0, 120))].slice(-60);
+  session.openQuestion = null;
+  return { questions: session.round.questions, number, total, unit: units.find((u) => u.title === selected.title) || null };
+}
+
+/**
+ * The document shown while a round is open: its questions, with the round number
+ * and how many concepts it covers.
+ */
+function roundDocument({ round, unit, questions, intro = null }) {
+  const components = [];
+  if (intro) components.push(say(intro));
+  components.push(say(
+    `**Round ${round}** — ${questions.length} question${questions.length === 1 ? '' : 's'} across ${unit?.concepts?.length || 1} concept${(unit?.concepts?.length || 1) === 1 ? '' : 's'} in **${unit?.title || 'this unit'}**. Answer them all, then submit once.`,
+  ));
+  components.push(testRoundForm({ questions, topic: { title: unit?.title || 'Test' }, sessionId: 'round' }));
+  return makeDocument(components, { responseType: 'assessment', topic: unit?.title || '' });
+}
+
+/* -------------------------------------------------------------------------- */
+/* the unit loop: learn → test → diagnose → retest                            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Grade a submitted round, diagnose every miss, and decide what comes next.
+ *
+ * The loop the brief asks for:
+ *
+ *   - every miss is named as a knowledge gap, a misconception or a practical
+ *     difficulty, and explained cleanly;
+ *   - the unit is then retested with *new* questions, not the ones just missed;
+ *   - this repeats until every question in a round is right;
+ *   - in test mode the explanation step is skipped entirely and the learner goes
+ *     straight back into questions.
+ *
+ * Grading is per question, in parallel, and each result keeps the question it
+ * belongs to so nothing is attributed to the wrong concept.
+ */
+async function gradeRound(session, submitted = []) {
+  const open = session.round?.questions || [];
+  if (!open.length) throw badRequest('There is no round open. Choose Learn or Test to start one.');
+
+  const byId = new Map(open.map((q) => [q.id, q]));
+  // Unknown ids are ignored rather than failing the whole submission: a stale tab
+  // should not lose the answers that are still valid.
+  const paired = submitted
+    .map((a) => ({ question: byId.get(String(a.question_id)), value: a.value }))
+    .filter((p) => p.question);
+
+  if (!paired.length) throw badRequest('None of those answers match the questions on screen.');
+
+  const graded = await Promise.all(paired.map(async ({ question, value }) => {
+    const topic = (session.topics || []).find((t) => t.id === question.topicId) || null;
+    const result = await gradeAnswer({ question, answer: value, topic, userId: session.userId });
+    const verified = !result.runtimeUnavailable && !result.unverified;
+    return {
+      question_id: question.id,
+      question,
+      topicId: question.topicId,
+      answer: value,
+      ...result,
+      verified,
+      diagnosis: diagnoseMistake({ question, verdict: result.verdict, chosen: value, graded: result, runtimeUnavailable: Boolean(result.runtimeUnavailable) }),
+    };
+  }));
+
+  // Record the evidence the same way a single answer did, so gaps and mastery
+  // keep flowing into the existing engines.
+  const now = new Date();
+  for (const result of graded) {
+    const topic = (session.topics || []).find((t) => t.id === result.topicId) || null;
+    if (topic && result.verified) Object.assign(topic, applyAnswerToTopic(topic, { verdict: result.verdict, verified: true, now }));
+    const category = gapCategory({ question: result.question, verdict: result.verdict, runtimeUnavailable: !result.verified });
+    if (category && topic) {
+      await recordGap({
+        userId: session.userId,
+        classroomId: null,
+        conceptId: null,
+        category,
+        description: `${topic.title}: ${result.misconception || result.feedback || 'incorrect answer'}`.slice(0, 500),
+        descriptionKey: `${topic.id}:${result.question_id}:${result.verdict}`,
+        evidence: String(result.answer ?? '').slice(0, 500),
+        evidenceType: 'tracs_answer',
+        evidenceRef: String(session._id),
+        severity: result.verdict === 'incorrect' ? 'medium' : 'low',
+        confidence: 0.7,
+        detectedBy: 'ai',
+      }).catch(() => {});
+    }
+  }
+
+  session.stats = {
+    ...(session.stats || {}),
+    answered: (session.stats?.answered || 0) + graded.length,
+    correct: (session.stats?.correct || 0) + graded.filter((r) => r.verdict === 'correct').length,
+    topics: (session.topics || []).length,
+  };
+
+  /**
+   * What counts as a miss.
+   *
+   * Only answers the server could actually judge, and which came back wrong.
+   * `partly_correct` is what an open-text answer gets when no model is available
+   * to mark it — the local evaluator records it and says plainly that it was not
+   * graded against a reference answer. Treating that as a miss told learners
+   * their correct explanation was a knowledge gap, and would have retested them
+   * forever over answers nothing had actually judged.
+   */
+  const judgedWrong = (r) => r.verified && (r.verdict === 'incorrect' || r.verdict === 'unanswered');
+  const misses = graded.filter((r) => judgedWrong(r) && r.diagnosis?.category);
+  const unjudged = graded.filter((r) => !r.verified || r.verdict === 'partly_correct' || r.verdict === 'not_graded');
+  return { graded, misses, unjudged, passed: misses.length === 0 };
+}
+
+/**
+ * What to say after a round, and what to do next.
+ *
+ * A clean round ends the loop ("all right — take the next unit or go deeper").
+ * A round with misses produces the categorised breakdown, and then either a
+ * re-teach (learn mode) or straight back into fresh questions (test mode).
+ */
+async function finishRound(session, { mode, graded, misses, unjudged = [], passed }) {
+  const unitTitle = session.selectedUnit?.title || 'this unit';
+  const report = diagnosisReport({ results: graded, questions: session.round.questions });
+
+  session.round.results = graded;
+  session.round.finishedAt = new Date().toISOString();
+  session.round.missedConceptIds = [...new Set(misses.map((m) => m.topicId).filter(Boolean))];
+
+  if (passed) {
+    const noted = unjudged.length
+      ? ` ${unjudged.length} open answer${unjudged.length === 1 ? '' : 's'} could not be marked automatically and ${unjudged.length === 1 ? 'is' : 'are'} not counted against you.`
+      : '';
+    const components = [
+      say(`**All ${graded.length} correct.** ${unitTitle} is holding up under questions — that is evidence, not a feeling.${noted}`),
+    ];
+    // Mark every concept in the unit as demonstrated so the syllabus view and the
+    // mastery labels reflect what just happened.
+    for (const conceptId of session.selectedUnit?.concepts || []) {
+      const topic = (session.topics || []).find((t) => t.id === conceptId);
+      if (topic) Object.assign(topic, applyAnswerToTopic(topic, { verdict: 'correct', verified: true, now: new Date() }));
+    }
+    // Cleared so the next turn is a fresh request (a new round, or another unit)
+    // rather than a resubmission of the round that just passed.
+    session.round = null;
+    session.mode = null;
+    session.openQuestion = null;
+    components.push({
+      id: `unit_done_${Date.now().toString(36)}`,
+      type: 'actions',
+      title: 'What next',
+      actions: [
+        { id: 'next_unit', label: 'Choose another unit', action: 'open_practice', tone: 'primary' },
+        { id: 'again', label: 'Test this unit harder', action: 'continue_lesson', command: 'test' },
+      ],
+    });
+    return makeDocument(components, { responseType: 'progress_summary', topic: unitTitle });
+  }
+
+  const components = [
+    say(`**${graded.length - misses.length} of ${graded.length} correct.** Not done yet — here is exactly what went wrong.`),
+    ...report.components,
+  ];
+
+  if (mode === 'learn') {
+    // Re-teach the concepts that were missed, then retest. The explanation is
+    // authored per missed concept rather than for the whole unit so it addresses
+    // what the round actually found.
+    const missedTopics = [...new Set(misses.map((m) => m.topicId))];
+    const explanations = await Promise.all(missedTopics.map((id) => {
+      const topic = (session.topics || []).find((t) => t.id === id);
+      if (!topic) return null;
+      return authorExplanation({
+        topic,
+        syllabusExcerpt: excerptFor(session, topic),
+        userId: session.userId,
+        reTeach: true,
+      }).then((r) => ({ topic, document: r.document })).catch(() => null);
+    }));
+
+    for (const item of explanations) {
+      if (!item) continue;
+      components.push(say(`### ${item.topic.title}`));
+      components.push(...(item.document.components || []));
+    }
+  }
+
+  // The retest: fresh questions, same unit, biased to what was missed. Authored
+  // before responding so the learner is not left waiting on a second round trip.
+  const { questions, number } = await startRound(session);
+  session.mode = mode;
+  components.push(say(
+    mode === 'learn'
+      ? 'That is the idea again, from a different angle. Now the same concepts come back as **new questions** — nothing above is repeated.'
+      : 'Back to questions. These are **new questions on the same concepts**, aimed at the steps that just went wrong.',
+  ));
+  components.push(testRoundForm({ questions, topic: { title: unitTitle }, sessionId: 'retest' }));
+
+  return makeDocument(components, { responseType: 'educational_tutorial', topic: unitTitle, round: number });
+}
+
 router.post(
   '/tracs/:id/turn',
   asyncHandler(async (req, res) => {
@@ -258,6 +604,76 @@ router.post(
     const session = await loadSession(req.userId, req.params.id);
     const topics = session.topics || [];
     const now = new Date();
+
+    /* ---------------- the unit loop: submit a whole round --------------- */
+    // A submitted round is graded as a set, diagnosed, and followed by either a
+    // re-teach (learn) or a fresh retest (test). This sits in front of the old
+    // single-question flow so both paths share one session and one set of
+    // evidence writes.
+    if (Array.isArray(data.answers) && data.answers.length) {
+      const mode = data.command;
+      if (!session.selectedUnit) throw badRequest('Choose a unit before answering questions.');
+      const outcome = await gradeRound(session, data.answers);
+      const document = await finishRound(session, { mode, ...outcome });
+      await saveSession(session);
+      return res.json({
+        command: mode,
+        outcome: outcome.passed ? 'unit_passed' : 'round_diagnosed',
+        document,
+        session: sessionView(session),
+        diagnosis: {
+          total: outcome.graded.length,
+          correct: outcome.graded.length - outcome.misses.length,
+          misses: outcome.misses.map((m) => ({
+            question: m.question.question,
+            category: m.diagnosis.category,
+            label: m.diagnosis.label,
+            chosen: m.answer,
+            detail: m.diagnosis.detail,
+          })),
+        },
+      });
+    }
+
+    /* ------------------- learn / test on the selected unit -------------- */
+    // "Learn" explains the unit's concepts and then tests; "Test" goes straight
+    // to questions. Both are the same command surface the chat already had.
+    if (data.answer === undefined && session.selectedUnit && !session.round?.results?.length) {
+      const unit = groupTopicsByUnit(topics).find((u) => u.title === session.selectedUnit.title) || null;
+
+      if (data.command === 'learn') {
+        const concepts = topics.filter((t) => (session.selectedUnit.concepts || []).includes(t.id));
+        const [explanation] = await Promise.all([
+          authorExplanation({
+            topic: { ...concepts[0], title: unit?.title || concepts[0]?.title, summary: concepts.map((c) => `${c.title}: ${c.summary}`).join('\n') },
+            syllabusExcerpt: concepts.map((c) => excerptFor(session, c)).join('\n\n').slice(0, 4000),
+            userId: req.userId,
+          }),
+        ]);
+        const { questions, number } = await startRound(session);
+        session.mode = 'learn';
+        const document = makeDocument([
+          say(`**${unit?.title || 'This unit'}** — here is the idea from the ground up, then questions on it.`),
+          ...(explanation.document.components || []),
+          say(`Now let us see what stuck. **Round ${number}** — ${questions.length} questions across this unit.`),
+          testRoundForm({ questions, topic: { title: unit?.title || 'Test' }, sessionId: 'learn' }),
+        ], { responseType: 'educational_tutorial', topic: unit?.title || '' });
+        await saveSession(session);
+        return res.json({ command: 'learn', outcome: 'explained', document, session: sessionView(session) });
+      }
+
+      // Test mode: no explanation. Straight into the round.
+      const { questions, number } = await startRound(session);
+      session.mode = 'test';
+      const document = roundDocument({
+        round: number,
+        unit,
+        questions,
+        intro: `**${unit?.title || 'This unit'}** — straight to questions. No explanation, that is the point of Test.`,
+      });
+      await saveSession(session);
+      return res.json({ command: 'test', outcome: 'question', document, session: sessionView(session) });
+    }
 
     /* ---------------------------- /test --------------------------------- */
     if (data.command === 'test') {

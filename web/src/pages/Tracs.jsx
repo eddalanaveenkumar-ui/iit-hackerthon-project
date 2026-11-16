@@ -13,12 +13,14 @@ import DynamicRenderer from '../components/DynamicRenderer/DynamicRenderer';
 import { Spinner, useToast } from '../components/ui';
 import { createDynamicActions } from '../lib/dynamicUi';
 import {
+  chooseTracsUnit,
   deleteTracsSession,
   fetchTracsSession,
   listTracsSessions,
   sendTracsTurn,
   uploadTracsSyllabus,
 } from '../lib/tracs';
+import SyllabusReview from '../components/tracs/SyllabusReview';
 
 /**
  * TRACS
@@ -367,6 +369,12 @@ export default function Tracs() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
+  // The extracted syllabus, held so it can be shown before the chat asks its
+  // first question. `chosenUnit` is the unit being decided on; `startingUnit`
+  // marks which button is in flight.
+  const [units, setUnits] = useState([]);
+  const [chosenUnit, setChosenUnit] = useState(null);
+  const [startingUnit, setStartingUnit] = useState(null);
   const bottomRef = useRef(null);
   // Cheap and dependency-free: scrolling on every reveal step keeps the tail in
   // view while a reply unfolds, and does nothing once it has finished.
@@ -404,6 +412,11 @@ export default function Tracs() {
       .then((result) => {
         if (cancelled) return;
         setSession(result.session);
+        // No unit chosen yet: show the extracted syllabus so the learner picks
+        // one, rather than being dropped into a question about an arbitrary
+        // topic. Once a unit is chosen, the server reports it and the review
+        // panel stays out of the way.
+        setUnits(result.session.selected_unit ? [] : (result.session.units || []));
         setMessages([
           {
             id: 'welcome',
@@ -468,7 +481,7 @@ export default function Tracs() {
   /* ------------------------------- actions ------------------------------ */
 
   const send = useCallback(
-    async ({ command, answer, questionId, optimistic }) => {
+    async ({ command, answer, answers, questionId, optimistic }) => {
       if (!sessionId) return { ok: false };
       setBusy(true);
       const stamp = Date.now();
@@ -476,11 +489,11 @@ export default function Tracs() {
         setMessages((current) => [
           ...current,
           { id: `u-${stamp}`, role: 'user', text: optimistic },
-          { id: `p-${stamp}`, role: 'assistant', pending: command === 'test' ? 'Preparing a question…' : 'Writing an explanation…' },
+          { id: `p-${stamp}`, role: 'assistant', pending: command === 'test' ? 'Preparing questions…' : 'Writing an explanation and questions…' },
         ]);
       }
       try {
-        const result = await sendTracsTurn(sessionId, { command, answer, question_id: questionId });
+        const result = await sendTracsTurn(sessionId, { command, answer, answers, question_id: questionId });
         setSession(result.session);
         setMessages((current) => [
           ...current.filter((entry) => !entry.pending),
@@ -537,11 +550,20 @@ export default function Tracs() {
         const answers = payload?.answers || [];
         const first = answers[0];
         const command = formCommands.current.get(formId) || (session?.mode === 'learn' ? 'learn' : 'test');
+
+        // A whole round goes up together. This used to send `answers[0]` only,
+        // which silently threw away every other answer in the form — the round
+        // was then graded on one question and the rest looked unanswered.
+        const batch = answers.length > 1
+          ? answers.map((a) => ({ question_id: a.question_id, value: a.value }))
+          : null;
+
         const result = await send({
           command,
-          answer: first?.value ?? '',
-          questionId: first?.question_id,
-          optimistic: typeof first?.value === 'string' ? first.value : String(first?.value ?? ''),
+          ...(batch ? { answers: batch } : { answer: first?.value ?? '', questionId: first?.question_id }),
+          optimistic: batch
+            ? `Answered all ${batch.length} questions`
+            : (typeof first?.value === 'string' ? first.value : String(first?.value ?? '')),
         });
         if (!result.ok) throw new Error(result.reason || 'That answer could not be submitted.');
         return { ok: true, evaluation: null };
@@ -605,8 +627,38 @@ export default function Tracs() {
     navigate(`/app/tracs/${id}`);
   };
 
+  /**
+   * Choose a unit, then Learn or Test.
+   *
+   * Two clicks on purpose: the first says *which* unit, the second says whether
+   * to explain it first. Picking a unit and starting immediately would have made
+   * the choice of mode for them.
+   */
+  const pickUnit = async (unit, mode) => {
+    if (!mode) {
+      setChosenUnit(unit);
+      return;
+    }
+    setStartingUnit(mode);
+    try {
+      await chooseTracsUnit(sessionId, unit.title);
+      setChosenUnit(unit);
+      // The chat transcript starts from here — the review panel has done its job.
+      setUnits([]);
+      await send({ command: mode, optimistic: `Unit ${unit.index}: ${unit.title} — /${mode}` });
+    } catch (err) {
+      toast.error(err.message || 'That unit could not be started.');
+    } finally {
+      setStartingUnit(null);
+    }
+  };
+
   const handleUploaded = (result) => {
     setSession(result.session);
+    // Keep the extracted syllabus on screen so the learner can read what was
+    // parsed before entering the chat, then choose the unit they want.
+    setUnits(result.units || []);
+    setPendingUpload({ id: result.session.id, title: result.session.title });
     navigate(`/app/tracs/${result.session.id}`);
   };
 
@@ -668,6 +720,18 @@ export default function Tracs() {
 
       <section className="flex min-h-0 flex-1 flex-col bg-slate-50 dark:bg-slate-950">
         <div className="flex-1 space-y-3 overflow-y-auto p-3 sm:p-4">
+          {/* The extracted syllabus, before any question is asked. It stays
+              until a unit and a mode are chosen, because that choice is what
+              the whole session is scoped to. */}
+          {units.length ? (
+            <SyllabusReview
+              units={units}
+              chosen={chosenUnit}
+              busyUnit={startingUnit}
+              title={session?.title}
+              onChoose={pickUnit}
+            />
+          ) : null}
           {messages.map((entry, index) => (
             <ChatMessage
               key={entry.id}

@@ -195,6 +195,125 @@ function codeStub(topic) {
  * the first option and whose distractors are absurdities ("It has no practical
  * use"). That is not a question, it is a coin that always lands heads.
  */
+/**
+ * A different question about the same concept.
+ *
+ * Used when a round needs more questions than the curated bank has facts for.
+ * Each variant is still answerable from the syllabus excerpt and still has a
+ * defensible answer, which is the bar every question here has to clear — a
+ * variant that could not be marked would be worse than a shorter round.
+ *
+ * The angles are the ones that actually test understanding rather than recall:
+ * apply it, recognise it, predict its output, say what it is not.
+ */
+function localVariant(topic, { variant = 1, language = null } = {}) {
+  const [fact] = factsFor(topic, { language });
+  const title = String(topic?.title || 'this idea');
+  const summary = String(topic?.summary || '').trim();
+  const angle = ((variant - 1) % 7) + 1;
+
+  // A parsed bullet concept usually has no summary — only its title. So every
+  // angle below has to work from the title and, when present, a curated fact.
+  // An angle that needed prose would return nothing for most units, and the
+  // round would silently shrink back to one question per concept.
+  const claim = summary.length >= 30 ? summary.split(/(?<=[.;])\s+/)[0].slice(0, 160) : null;
+
+  if (fact) {
+    const wrong = fact.wrong.filter(Boolean);
+    const angles = {
+      // Which statement is true
+      1: () => ({
+        type: 'radio',
+        question: `Which of these is true about ${title.toLowerCase()}?`,
+        options: shuffleStable([fact.answer, ...wrong].slice(0, 4), `${fact.label}#a1`),
+        correct_index: 0,
+        explanation: fact.explain,
+      }),
+      // Spot the false claim
+      2: () => ({
+        type: 'radio',
+        question: `Someone claims: “${wrong[0] || 'the rule does not apply here'}” — about ${title.toLowerCase()}. Are they right?`,
+        options: shuffleStable([
+          `No — ${fact.answer.charAt(0).toLowerCase()}${fact.answer.slice(1)}`,
+          'Yes, that is exactly how it works',
+          'Only in some versions',
+          'It depends on the variable name',
+        ], `${fact.label}#a2`),
+        correct_index: 0,
+        explanation: fact.explain,
+      }),
+      // Choose the right correction
+      3: () => ({
+        type: 'radio',
+        question: `A learner gets ${title.toLowerCase()} wrong. Which correction is right?`,
+        options: shuffleStable([
+          fact.explain.slice(0, 180),
+          'They should memorise the syntax and not ask why',
+          'They should skip it and come back later',
+          'It is a matter of preference and has no right answer',
+        ], `${fact.label}#a3`),
+        correct_index: 0,
+        explanation: fact.explain,
+      }),
+      // Predict the outcome
+      4: () => ({
+        type: 'radio',
+        question: `What is the outcome in this unit's language when ${title.toLowerCase()} is applied as described?`,
+        options: shuffleStable([fact.answer, ...wrong].slice(0, 4), `${fact.label}#a4`),
+        correct_index: 0,
+        explanation: fact.explain,
+      }),
+      // Reject the misconception
+      5: () => ({
+        type: 'radio',
+        question: `Which of these is a common misconception about ${title.toLowerCase()}?`,
+        options: shuffleStable([
+          wrong[0] || 'It behaves the same in every language',
+          'It follows from the rules stated in the syllabus',
+          'It can be checked by running a small example',
+          'It is covered in this unit',
+        ], `${fact.label}#a5`),
+        correct_index: 0,
+        explanation: `That is the belief to drop. ${fact.explain}`,
+      }),
+    };
+    const built = angles[angle]?.() || angles[1]();
+    if (claim && angle === 6) {
+      return {
+        type: 'radio',
+        question: `Which statement matches what the material says about ${title.toLowerCase()}?`,
+        options: shuffleStable([claim, 'It is only relevant once the rest of the unit is finished', 'It behaves the same in every language, regardless of rules', 'It can be skipped and picked up by trial and error'], `${fact.label}#a6`),
+        correct_index: 0,
+        explanation: claim,
+      };
+    }
+    if (angle === 7) {
+      return {
+        type: 'textarea',
+        question: `Explain ${title.toLowerCase()} in your own words, then give one example of it going wrong.`,
+        placeholder: 'The idea, then an example…',
+      };
+    }
+    return built;
+  }
+
+  // No curated fact for this concept. Ask in the learner's own words — real
+  // questions, gradeable by the same rubric as any explanation question, and
+  // each one asks something different.
+  const open = [
+    `Explain ${title} in your own words, as if to someone who has not seen this unit.`,
+    `Name one situation where ${title} decides what the code does, and say why.`,
+    `What is the most common mistake people make with ${title}, and why is it wrong?`,
+    `Describe a case where ${title} does not behave the way a beginner would expect.`,
+    `How would you check whether you had understood ${title} correctly?`,
+  ];
+  return {
+    type: angle % 2 === 0 ? 'text_input' : 'textarea',
+    question: open[(angle - 1) % open.length],
+    placeholder: 'In your own words…',
+  };
+}
+
 function multipleChoice(topic, { attempt = 1, summary = '', language = null } = {}) {
   const [fact] = factsFor(topic, { language });
 
@@ -293,10 +412,19 @@ function shuffleStable(items, seed) {
 }
 
 /** The deterministic question, used when the model is unavailable or malformed. */
-export function localQuestion(topic, { attempt = 1, subject = '', language = null } = {}) {
+export function localQuestion(topic, { attempt = 1, subject = '', language = null, variant = 0 } = {}) {
   const type = pickQuestionType(topic, { attempt, subject, language });
   const summary = String(topic?.summary || '').slice(0, 240);
-  const base = { id: `q${Date.now().toString(36)}`, type, hint: undefined };
+  const base = { id: `q${Date.now().toString(36)}${variant ? `v${variant}` : ''}`, type, hint: undefined };
+
+  // A round asks several questions about one concept, and this fallback used to
+  // return the *same* question every time — so a five-question round collapsed
+  // to however many concepts the unit happened to have. Variants ask about the
+  // same idea from different angles, which is also what makes a retest a retest.
+  if (variant > 0) {
+    const asked = localVariant(topic, { variant, language });
+    if (asked) return { ...base, ...asked };
+  }
 
   if (type === 'radio') {
     const mc = multipleChoice(topic, { attempt, summary, language });
@@ -353,11 +481,20 @@ export async function authorQuestion({
   language = null,
   userId,
   conversationId,
+  // Stems already asked this session. A retest must not re-ask the question that
+  // produced the gap — repeating it tests recall of the question, not the idea.
+  avoid = [],
+  // Which angle on this concept to take when falling back to the local bank.
+  variant = 0,
 }) {
-  const fallback = localQuestion(topic, { attempt, subject, language });
+  const fallback = localQuestion(topic, { attempt, subject, language, variant });
   // Read per call: the probe caches for the process, so this is cheap, and it
   // keeps the prompt honest on a deployment that cannot run the learner's code.
   const codeRunnable = language ? runtimeAvailability(language) !== false : runtimeAvailability() !== false;
+
+  const avoidBlock = Array.isArray(avoid) && avoid.length
+    ? `\n\nQUESTIONS ALREADY ASKED (do not repeat or paraphrase these — ask about the same idea a different way):\n${avoid.slice(0, 12).map((q) => `- ${String(q).slice(0, 160)}`).join('\n')}`
+    : '';
 
   const previousBlock = previous
     ? `THE PREVIOUS ANSWER: verdict "${previous.verdict}".
@@ -392,7 +529,7 @@ Return ONLY JSON:
       },
       {
         role: 'system',
-        content: `TOPIC: ${topic.title}\nSYLLABUS EXCERPT:\n${String(syllabusExcerpt || topic.summary || '').slice(0, 3000)}\n\nATTEMPT NUMBER: ${attempt}\n${previousBlock}`,
+        content: `TOPIC: ${topic.title}\nSYLLABUS EXCERPT:\n${String(syllabusExcerpt || topic.summary || '').slice(0, 3000)}\n\nATTEMPT NUMBER: ${attempt}\n${previousBlock}${avoidBlock}`,
       },
       { role: 'user', content: `Write the next question for "${topic.title}".` },
     ],
@@ -1315,3 +1452,273 @@ export function gapCategory({ question, verdict, runtimeUnavailable = false }) {
 
 export { executeCode, applyExecutionVerdicts };
 export const tracsSchemas = { z };
+
+/* -------------------------------------------------------------------------- */
+/* DIAGNOSIS                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The three categories the brief asks for, in the learner's words.
+ *
+ * The existing gap engine already files these; what was missing was telling the
+ * learner which one their mistake was. A bare "not quite" does not say whether
+ * they never knew the idea, believed something false about it, or knew it and
+ * could not apply it — and those need different follow-ups.
+ */
+export const DIAGNOSIS_LABELS = Object.freeze({
+  knowledge_gap: 'knowledge gap',
+  misconception: 'misconception',
+  practical_difficulty: 'practical difficulty',
+});
+
+/**
+ * Classify one wrong answer.
+ *
+ * Deliberately conservative and rule-based rather than model-guessed: the label
+ * is shown to the learner as a claim about their understanding, so it must be
+ * defensible from what they actually did.
+ *
+ *   misconception      they chose a specific wrong option. They held a belief and
+ *                      it is identifiable — a blank answer is not a belief.
+ *   practical_difficulty  the work was a program to write, or the answer shows the
+ *                      right idea applied wrongly (a near miss on a calculation).
+ *   knowledge_gap      everything else: no answer, or a miss with no diagnostic
+ *                      signal to distinguish it.
+ */
+export function diagnoseMistake({ question, verdict, chosen, graded = null, runtimeUnavailable = false } = {}) {
+  if (verdict === 'correct') return null;
+  if (runtimeUnavailable) return null;
+  // A judgement that could not be made is not evidence about the learner.
+  if (verdict === 'not_graded' || verdict === 'unanswered') {
+    return {
+      category: null,
+      label: 'nothing to diagnose',
+      detail: 'This answer could not be judged, so it is not counted as a mistake.',
+    };
+  }
+
+  const kind = question?.type;
+  const answer = String(chosen ?? '').trim();
+  const correct = (question?.type === 'radio' || question?.type === 'select')
+    ? String(question?.options?.[question?.correct_index] ?? '')
+    : String(graded?.correct_answer ?? '');
+
+  if (kind === 'code_input') {
+    return {
+      category: 'practical_difficulty',
+      label: DIAGNOSIS_LABELS.practical_difficulty,
+      detail: 'The idea may be clear; turning it into working code is where it broke.',
+    };
+  }
+
+  if ((kind === 'radio' || kind === 'select') && answer) {
+    return {
+      category: 'misconception',
+      label: DIAGNOSIS_LABELS.misconception,
+      detail: `You chose “${answer.slice(0, 120)}” rather than “${correct.slice(0, 120)}”. That is a specific belief about how this works, and it is the thing to correct.`,
+    };
+  }
+
+  // A near miss on a short answer — the right idea with the wrong detail — is a
+  // practical difficulty, not a blank.
+  if (answer && correct && answer.toLowerCase() !== correct.toLowerCase()) {
+    const overlap = answer.toLowerCase().split(/\s+/).filter((w) => w.length > 2 && correct.toLowerCase().includes(w));
+    if (overlap.length) {
+      return {
+        category: 'practical_difficulty',
+        label: DIAGNOSIS_LABELS.practical_difficulty,
+        detail: `Your answer has the right idea in it — “${answer.slice(0, 120)}” — but lands on a different detail than “${correct.slice(0, 120)}”.`,
+      };
+    }
+  }
+
+  return {
+    category: 'knowledge_gap',
+    label: DIAGNOSIS_LABELS.knowledge_gap,
+    detail: answer
+      ? 'This part of the idea did not come back at all, which usually means it has not been learned yet rather than misremembered.'
+      : 'No answer was given, so there is nothing yet to correct — this is a gap to fill.',
+  };
+}
+
+/**
+ * The end-of-round report: every miss, its category, and a clean explanation.
+ *
+ * Shown before the retest so the learner sees what the round found before being
+ * asked again. One text component per miss keeps each explanation attached to
+ * the question it belongs to instead of one wall of prose.
+ */
+export function diagnosisReport({ results = [], questions = [] } = {}) {
+  const byId = new Map((questions || []).map((q) => [q.id, q]));
+  const misses = [];
+  const components = [];
+
+  for (const result of results) {
+    if (!result || result.verdict === 'correct') continue;
+    const question = byId.get(result.question_id) || result.question || null;
+    const diagnosis = result.diagnosis || diagnoseMistake({
+      question,
+      verdict: result.verdict,
+      chosen: result.answer,
+      graded: result,
+      runtimeUnavailable: Boolean(result.runtimeUnavailable),
+    });
+    if (!diagnosis?.category) continue;
+    misses.push({
+      question_id: result.question_id,
+      question: question?.question || '',
+      category: diagnosis.category,
+      label: diagnosis.label,
+      chosen: String(result.answer ?? '').slice(0, 300),
+      correct: String((question?.options?.[question?.correct_index]) ?? result.correct_answer ?? '').slice(0, 300),
+      detail: diagnosis.detail,
+      explanation: String(result.explanation || result.feedback || '').slice(0, 1200),
+    });
+  }
+
+  if (!misses.length) return { misses, components };
+
+  const counts = misses.reduce((acc, m) => ({ ...acc, [m.category]: (acc[m.category] || 0) + 1 }), {});
+  const summary = Object.entries(counts)
+    .map(([category, n]) => `${n} ${DIAGNOSIS_LABELS[category] || category}${n === 1 ? '' : 's'}`)
+    .join(', ');
+
+  components.push(say(`**Where this round went wrong:** ${summary}. Each one is broken down below, then the same ideas come back as new questions.`));
+
+  misses.forEach((miss, index) => {
+    const lines = [
+      `**${index + 1}. ${miss.label[0].toUpperCase()}${miss.label.slice(1)} — ${miss.question.slice(0, 200)}**`,
+      '',
+      miss.detail,
+    ];
+    if (miss.correct) lines.push('', `**The right answer:** ${miss.correct}`);
+    if (miss.explanation) lines.push('', miss.explanation);
+    components.push(say(lines.join('\n')));
+  });
+
+  return { misses, components };
+}
+
+export { groupTopicsByUnit, syllabusMarkdown, questionsPerRound } from './topics.js';
+
+/**
+ * A whole test round in one form.
+ *
+ * `/test` used to ask one question at a time, but a round of 5–15 is a single
+ * sitting: the learner answers them together and gets one diagnosis of the round,
+ * not fourteen separate verdicts. Batch submission is also what makes an honest
+ * "which category was that mistake" possible — the round is analysed as a whole.
+ *
+ * `index`/`total` on the form title count questions; the session counts rounds.
+ */
+export function testRoundForm({ questions = [], topic, sessionId, title = null }) {
+  const fieldLike = questions.map((question) => ({
+    id: String(question.id).slice(0, 64),
+    type: question.type,
+    question: question.question,
+    description: question.description || undefined,
+    placeholder: question.placeholder || undefined,
+    options: question.options || undefined,
+    required: true,
+    hint: question.hint || undefined,
+    language: question.language || undefined,
+    expected_output: question.expected_output || undefined,
+    tests: question.tests || undefined,
+    code_snippet: question.code_snippet || undefined,
+    code_inline: question.code_inline || undefined,
+    min: question.min,
+    max: question.max,
+    step: question.step,
+  }));
+
+  return {
+    id: `round_${sessionId || 's'}_${encoder()}`.slice(0, 80),
+    type: 'question_form',
+    title: title || `${topic?.title ? `${topic.title} — ` : ''}${questions.length} questions`,
+    description: 'Answer all of them, then submit once. The whole round is marked together.',
+    questions: fieldLike,
+    submission: {
+      button_text: `Submit ${questions.length} answer${questions.length === 1 ? '' : 's'}`,
+      action: 'submit_ai_questions',
+      evaluation: 'ai_evaluation',
+    },
+  };
+}
+
+/**
+ * Choose the next round's questions for a set of concepts.
+ *
+ * A round covers the *unit*, not one concept: the learner picked a unit and
+ * expects it tested. Concepts are cycled so the questions spread across the
+ * unit, and concepts that were missed last round are asked again first — that is
+ * what makes the retest a retest rather than a different quiz.
+ *
+ * Every question is authored fresh. `avoid` carries the stems already asked, so
+ * a retest does not repeat the questions that produced the gaps.
+ */
+export async function authorRound({
+  concepts = [],
+  count = 8,
+  syllabusExcerptFor = null,
+  sessionText = '',
+  language = null,
+  weakConceptIds = [],
+  avoid = [],
+  userId,
+  conversationId,
+} = {}) {
+  const ordered = [
+    ...concepts.filter((c) => weakConceptIds.includes(c.id)),
+    ...concepts.filter((c) => !weakConceptIds.includes(c.id)),
+  ];
+  const target = ordered.length ? ordered : concepts;
+  const questions = [];
+  const seen = new Set(avoid.map((s) => String(s).toLowerCase().slice(0, 80)));
+
+  // Author in parallel: a round of 15 sequential model calls would take minutes
+  // and hit the gateway timeout long before it finished.
+  const slots = Array.from({ length: count }, (_, i) => target[i % target.length]).filter(Boolean);
+  const drafted = await Promise.all(slots.map((concept, i) => authorQuestion({
+    topic: concept,
+    syllabusExcerpt: syllabusExcerptFor ? syllabusExcerptFor(concept) : `${concept.summary || ''}\n\n${String(sessionText).slice(0, 800)}`,
+    attempt: (concept.attempts || 0) + 1 + Math.floor(i / target.length),
+    previous: null,
+    language: language || languageFor(`${sessionText} ${concept.title}`),
+    userId,
+    conversationId,
+    // How many times this concept has already appeared in *this* round. The local
+    // fallback uses it to ask about the same idea from a different angle, which is
+    // what keeps a 5–15 question round from being the same question five times.
+    variant: i < target.length ? 0 : 1 + Math.floor(i / target.length) - 1,
+    avoid: [...seen],
+  })));
+
+  drafted.forEach((question, i) => {
+    if (!question || !String(question.question || '').trim()) return;
+    const stem = String(question.question || '').toLowerCase().slice(0, 80);
+    // A repeated stem inside one round reads as a copy-paste error, so it is
+    // skipped — but only when there is something else to show. Dropping it always
+    // is what silently left a five-question round with three questions in it.
+    if (seen.has(stem)) return;
+    seen.add(stem);
+    questions.push({ ...question, topicId: slots[i]?.id || null, concept: slots[i]?.title || null });
+  });
+
+  // Top the round up if drafts were dropped. The variants are cheap (no model
+  // call on the fallback path) and a round of fewer than `count` questions is
+  // still a round — it is not worth failing over one duplicate.
+  let top = 1;
+  while (questions.length < count && top <= 6) {
+    for (const concept of target) {
+      if (questions.length >= count) break;
+      const extra = localQuestion(concept, { attempt: 1, language: language || languageFor(`${sessionText} ${concept.title}`), variant: top });
+      const stem = String(extra?.question || '').toLowerCase().slice(0, 80);
+      if (!extra?.question || seen.has(stem)) continue;
+      seen.add(stem);
+      questions.push({ ...extra, topicId: concept.id, concept: concept.title });
+    }
+    top += 1;
+  }
+
+  return questions;
+}
