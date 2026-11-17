@@ -28,6 +28,9 @@ const server = spawn(process.execPath, ['src/index.js'], {
     DB_PORT: String(dbPort),
     DB_PATH: dbPath,
     AI_RATE_LIMIT_MAX: '10000',
+    // Demo content is off by default everywhere else; the suites exercise
+    // classroom membership and permissions, so they ask for the sample data
+    // explicitly here. This is the only place it is still switched on.
     SEED_DEMO: 'true',
     JWT_SECRET: 'tracs-secret-key-0123456789-0123456789',
     SECRET_ENCRYPTION_KEY: 'tracs-encryption-key-0123456789-0123456789',

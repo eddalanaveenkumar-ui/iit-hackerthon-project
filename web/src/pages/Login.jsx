@@ -5,19 +5,14 @@ import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { ErrorBanner } from '../components/ui';
 
-const DEMO_ACCOUNTS = [
-  { email: 'naveen@learnmate.ai', label: 'Naveen Kumar', note: 'Learner in 2 classrooms, owner of 1' },
-  { email: 'aisha@learnmate.ai', label: 'Aisha Rahman', note: 'Owner — Java Programming' },
-  { email: 'rohit@learnmate.ai', label: 'Rohit Verma', note: 'Teacher with monitoring OFF' },
-  { email: 'admin@learnmate.ai', label: 'Platform Admin', note: 'AI configuration access' },
-];
-
 export default function Login() {
   const { user, loading, login } = useAuth();
   const { theme, toggle } = useTheme();
   const navigate = useNavigate();
-  const [email, setEmail] = useState('naveen@learnmate.ai');
-  const [password, setPassword] = useState('LearnMate123!');
+  // Empty, not pre-filled: the form should not arrive holding someone's
+  // credentials.
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -124,30 +119,6 @@ export default function Login() {
               {!busy ? <ArrowRight className="h-4 w-4" /> : null}
             </button>
           </form>
-
-          <div className="mt-8">
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Demo accounts</p>
-            <div className="mt-2 space-y-1.5">
-              {DEMO_ACCOUNTS.map((acc) => (
-                <button
-                  key={acc.email}
-                  type="button"
-                  onClick={() => {
-                    setEmail(acc.email);
-                    setPassword('LearnMate123!');
-                  }}
-                  className="flex w-full items-center justify-between gap-2 rounded-lg border border-slate-200 px-3 py-2 text-left text-xs transition-colors hover:border-brand-300 hover:bg-brand-50/40 dark:border-slate-800 dark:hover:border-brand-700 dark:hover:bg-brand-950/30"
-                >
-                  <span>
-                    <span className="block font-medium text-slate-800 dark:text-slate-100">{acc.label}</span>
-                    <span className="block text-slate-500 dark:text-slate-400">{acc.note}</span>
-                  </span>
-                  <span className="shrink-0 font-mono text-[10px] text-slate-400">use</span>
-                </button>
-              ))}
-            </div>
-            <p className="mt-2 text-[11px] text-slate-400">All demo accounts use the password LearnMate123!</p>
-          </div>
         </div>
       </div>
     </div>

@@ -151,10 +151,17 @@ export function extractTopics(text, { limit = 40 } = {}) {
         currentUnit = cleanHeading(heading[1]);
         continue;
       }
+      // Only *prose* under the heading is its body. A bulleted list under a
+      // concept heading is the next level of structure — those bullets are
+      // concepts in their own right, and swallowing them as text both lost them
+      // and produced a collapse of all of them ("Maths - Addition and
+      // Subtraction - Multiplication") as one junk topic.
       const body = [];
       while (index + 1 < lines.length && !/^#{1,6}\s+/.test(lines[index + 1].trim()) && body.length < 6) {
         const next = lines[index + 1].trim();
-        if (next) body.push(next.replace(/^[-*•+]\s+/, ''));
+        if (!next) { index += 1; continue; }
+        if (/^[-*•+]\s+/.test(next)) break;
+        body.push(next);
         index += 1;
       }
       const keywords = body.join(' ').toLowerCase().match(/[a-z][a-z+#.-]{2,}/g) || [];
@@ -165,9 +172,11 @@ export function extractTopics(text, { limit = 40 } = {}) {
     // 2. a "Unit 1: …" / "Week 3 — …" style line, with or without the marker
     const unitLine = trimmed.match(/^(?:week|module|unit|chapter|part|topic|lesson)\s*(\d+[a-z]?)\s*[:.\-–]?\s*(.*)$/i);
     if (unitLine) {
-      const title = unitLine[2] || unitLine[1];
-      if (unitLine[2]) push(title, { unit: cleanHeading(trimmed) });
-      else currentUnit = cleanHeading(trimmed);
+      // "Unit 1: Java Fundamentals" names the *container*. It used to also be
+      // pushed as a topic — so the unit's own name came back as a concept, and
+      // its real concepts were filed under no unit at all. A container heading
+      // only ever sets `currentUnit`; the concepts below it are the topics.
+      currentUnit = cleanHeading(trimmed);
       continue;
     }
 
@@ -203,9 +212,15 @@ export function extractTopics(text, { limit = 40 } = {}) {
   // 5. Nothing structural survived: fall back to the prose itself. Split on
   //    sentence boundaries and keep the ones that read like a concept.
   if (topics.length < 3) {
+    // Flatten *line breaks* only — not the whole document. Joining every line
+    // first turned a short structured syllabus into one pseudo-sentence
+    // ("### Unit 1: Maths - Addition and Subtraction - Multiplication") which was
+    // then pushed as a concept. Prose paragraphs still come through whole.
     const sentences = raw
-      .replace(/\s+/g, ' ')
-      .split(/(?<=[.!?])\s+/)
+      .split('\n')
+      .map((line) => line.replace(/^\s*(#{1,6}|[-*•+]|\d+[.)])\s*/, '').trim())
+      .filter(Boolean)
+      .flatMap((line) => line.split(/(?<=[.!?])\s+/))
       .map((s) => s.trim())
       .filter((s) => s.length > 12 && s.length < 200);
     for (const sentence of sentences) {
@@ -354,6 +369,23 @@ export const turnSchema = z.object({
       z.null(),
     ])
     .optional(),
+  // A whole test round, submitted at once. `answer`/`question_id` remain for the
+  // old one-question path and for /learn's checks.
+  answers: z
+    .array(
+      z.object({
+        question_id: z.string().min(1).max(80),
+        value: z.union([
+          z.string().max(20_000),
+          z.number().finite(),
+          z.boolean(),
+          z.array(z.string().max(2000)).max(50),
+          z.null(),
+        ]),
+      }),
+    )
+    .max(20)
+    .optional(),
 });
 
 export const uploadSchema = z.object({
@@ -372,4 +404,86 @@ export function parseCommand(input) {
   const name = match[1].toLowerCase();
   if (name !== 'test' && name !== 'learn') throw badRequest('Only /test and /learn are available.');
   return { command: name, rest: String(match[2] || '').trim() };
+}
+
+/* -------------------------------------------------------------------------- */
+/* UNITS                                                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The syllabus as units of concepts.
+ *
+ * A learner who has just uploaded a syllabus is choosing what to study, not
+ * reading a flat list of forty headings. Grouping by the unit each concept was
+ * parsed under turns the upload into that choice:
+ *
+ *   ### Unit 1: Java Fundamentals
+ *   - Variables and primitive types
+ *   - Operators and expressions
+ *
+ * Everything comes from the parser's own `unit` field, so this is a view of the
+ * parse rather than a second, differently-behaved extraction. A syllabus with no
+ * unit headings produces one unit holding everything, which is honest: there was
+ * no structure to group by.
+ *
+ * @param {Array} topics parsed topics
+ * @returns {Array<{index:number,title:string,concepts:Array<{id:string,title:string,summary:string}>}>}
+ */
+export function groupTopicsByUnit(topics = []) {
+  const units = [];
+  const byTitle = new Map();
+
+  topics.forEach((topic) => {
+    const title = String(topic?.unit || '').trim() || 'Syllabus';
+    const key = title.toLowerCase();
+    let unit = byTitle.get(key);
+    if (!unit) {
+      unit = { index: units.length + 1, title, concepts: [] };
+      byTitle.set(key, unit);
+      units.push(unit);
+    }
+    unit.concepts.push({
+      id: topic.id,
+      title: topic.title,
+      summary: String(topic.summary || '').slice(0, 600),
+    });
+  });
+
+  return units;
+}
+
+/**
+ * The markdown a learner sees after uploading, before any chat.
+ *
+ *   ### Unit 1: Java Fundamentals
+ *
+ *   - Variables and primitive types
+ *   - Operators and expressions
+ *
+ * Rendering is the client's job; the shape is fixed here so the same text is
+ * produced for the preview, for the chat transcript and for tests.
+ */
+export function syllabusMarkdown(units = []) {
+  return units
+    .map((unit) => {
+      const lines = unit.concepts.map((concept) => `- ${concept.title}`);
+      return `### Unit ${unit.index}: ${unit.title}\n\n${lines.join('\n')}`;
+    })
+    .join('\n\n');
+}
+
+/**
+ * How many questions a test round should ask.
+ *
+ * The brief is 5–15, and the count grows with the size of what is being tested:
+ * a two-concept unit at five questions is 2–3 questions per idea, which is
+ * enough to catch a gap without turning into an exam. The first round is short
+ * and later rounds grow when the learner keeps missing — by the third round the
+ * same idea is being probed from more angles, which is what the retest is for.
+ */
+export function questionsPerRound({ concepts = 1, round = 1 } = {}) {
+  const base = Math.max(5, Math.min(15, concepts * 3));
+  // Missing repeatedly means the idea is genuinely unsettled, so probe it more.
+  const grown = round <= 1 ? base : Math.min(15, base + (round - 1) * 2);
+  return Math.max(5, Math.min(15, grown));
 }

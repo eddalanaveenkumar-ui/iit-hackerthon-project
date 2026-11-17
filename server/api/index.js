@@ -42,7 +42,9 @@ async function initialise() {
   await ensureIndexes();
   await bootstrapAiCatalog();
 
-  if (config.seedDemo) {
+  // The administrator account is unconditional — a fresh deployment needs a way
+  // in. Demo content is gated inside ensureSeed on SEED_DEMO.
+  {
     const { ensureSeed } = await import('../src/seed/seed.js');
     await ensureSeed().catch((err) => console.error(label('seed skipped'), err.message));
   }

@@ -41,7 +41,12 @@ router.post(
       avatarColor: AVATAR_COLORS[userCount % AVATAR_COLORS.length],
       // Platform administrator flag only. Classroom capabilities come from
       // classroom-scoped memberships, never from this field.
-      role: userCount === 0 && data.email === 'admin@learnmate.ai' ? 'admin' : 'user',
+      //
+      // The administrator is the configured address (ADMIN_EMAIL, default
+      // admin@gmail.com) — the account is normally created by
+      // `ensureAdminAccount()`, so this only matters if that account registers
+      // itself first. Everyone else signs up as an ordinary user.
+      role: data.email === config.adminEmail ? 'admin' : 'user',
       headline: data.headline || '',
       preferences: { theme: 'light', notifications: true },
       lastActiveAt: new Date(),

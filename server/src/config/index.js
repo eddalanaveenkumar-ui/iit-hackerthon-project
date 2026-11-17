@@ -62,7 +62,15 @@ export const config = {
     modelKeys: {},
   },
 
-  seedDemo: bool(process.env.SEED_DEMO, true),
+  // Demo content is OFF unless a deployment asks for it. It used to default to
+  // true, which put seven shared-password accounts — one of them an
+  // administrator — into every fresh database, including production.
+  seedDemo: bool(process.env.SEED_DEMO, false),
+
+  // The administrator account. Created on demand at boot (see
+  // ensureAdminAccount) so a fresh deployment always has a way in.
+  adminEmail: String(process.env.ADMIN_EMAIL || 'admin@gmail.com').trim().toLowerCase(),
+  adminPassword: String(process.env.ADMIN_PASSWORD || 'adimin'),
   uploadDir: path.join(ROOT, 'server/.data/uploads'),
 };
 

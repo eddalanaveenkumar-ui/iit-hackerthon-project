@@ -4,8 +4,13 @@
  * Verifies that every API call the React client makes returns a shape the
  * corresponding page actually reads. Run against a live server:
  *
+ *   SEED_DEMO=true npm run dev          # in another terminal
  *   node tests/smoke-web.mjs            # uses http://127.0.0.1:3001
  *   BASE=http://host:port node tests/smoke-web.mjs
+ *
+ * The suite signs in as the sample users, so the server it points at must be
+ * started with SEED_DEMO=true. Demo content is off by default because a real
+ * deployment must not ship shared-password accounts.
  *
  * This is not a replacement for tests/e2e.mjs (which drives the isolated
  * harness); it guards the client/server contract specifically.
