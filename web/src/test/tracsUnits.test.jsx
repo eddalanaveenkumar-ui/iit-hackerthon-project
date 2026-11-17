@@ -93,3 +93,47 @@ describe('the extracted syllabus', () => {
     expect(container.firstChild).toBeNull();
   });
 });
+
+/**
+ * A round is 5–15 questions. The renderer used to cap a `question_form` at 12,
+ * so the longest rounds failed validation and the whole form was dropped — the
+ * learner saw "1 section was skipped because the tutor's response was malformed"
+ * instead of a test. This is the boundary, from the panel's point of view.
+ */
+import { validateUI } from '../components/DynamicRenderer/utils/validateUI.js';
+
+const roundDocument = (count) => ({
+  version: '1.0',
+  response_id: 'round-check',
+  response_type: 'question_form',
+  components: [
+    {
+      id: 'round-form',
+      type: 'question_form',
+      title: `Java Fundamentals — ${count} questions`,
+      questions: Array.from({ length: count }, (_, i) => ({
+        id: `Q${i + 1}`,
+        type: 'radio',
+        question: `Question ${i + 1}?`,
+        required: true,
+        options: ['Alpha', 'Beta'],
+      })),
+      submission: { button_text: `Submit ${count} answers`, action: 'submit_ai_questions', evaluation: 'ai_evaluation' },
+    },
+  ],
+});
+
+describe('every round size the engine can produce', () => {
+  for (const count of [5, 9, 12, 13, 15]) {
+    it(`renders a ${count}-question round`, () => {
+      const result = validateUI(roundDocument(count));
+      expect(result.ok).toBe(true);
+      expect(result.dropped).toEqual([]);
+      expect(result.document.components[0].questions).toHaveLength(count);
+    });
+  }
+
+  it('still refuses more than a round can hold', () => {
+    expect(validateUI(roundDocument(16)).ok).toBe(false);
+  });
+});

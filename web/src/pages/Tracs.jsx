@@ -360,7 +360,10 @@ export default function Tracs() {
   const navigate = useNavigate();
   const toast = useToast();
 
-  const [sessionId, setSessionId] = useState(routeSessionId || null);
+  // The open session is whatever the route names. This used to be a separate
+  // piece of state seeded once at mount, so after an upload navigated to
+  // `/app/tracs/<id>` it stayed null and every turn was a silent no-op.
+  const sessionId = routeSessionId || null;
   const [session, setSession] = useState(null);
   const [sessions, setSessions] = useState([]);
   const [listing, setListing] = useState(!routeSessionId);
@@ -658,7 +661,10 @@ export default function Tracs() {
     // Keep the extracted syllabus on screen so the learner can read what was
     // parsed before entering the chat, then choose the unit they want.
     setUnits(result.units || []);
-    setPendingUpload({ id: result.session.id, title: result.session.title });
+    // The session view carries `units` too, so the refetch that follows the
+    // route change re-derives the same syllabus. Setting them here as well means
+    // the review panel is already on screen instead of flashing the empty state
+    // while that request is in flight.
     navigate(`/app/tracs/${result.session.id}`);
   };
 
@@ -674,7 +680,7 @@ export default function Tracs() {
 
   /* -------------------------------- views ------------------------------- */
 
-  if (!routeSessionId && !sessionId) {
+  if (!sessionId) {
     return (
       <>
         <UploadPanel onUploaded={handleUploaded} />

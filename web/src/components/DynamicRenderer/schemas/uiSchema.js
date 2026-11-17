@@ -27,7 +27,10 @@ export const UI_LIMITS = Object.freeze({
   maxText: 12_000,
   maxShortText: 400,
   maxItems: 20,
-  maxQuestions: 12,
+  // A round is 5-15 questions submitted together, so this must clear 15. At 12
+  // the longest rounds failed validation and the renderer silently dropped the
+  // whole form — the learner saw "1 section was skipped" instead of a test.
+  maxQuestions: 15,
   maxQuizQuestions: 8,
   maxOptions: 12,
   maxTableRows: 60,
