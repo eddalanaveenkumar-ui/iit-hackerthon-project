@@ -45,6 +45,7 @@ describe('every real generated lesson renders', () => {
       await waitFor(() => expect(container.textContent.length).toBeGreaterThan(200));
       expect(container.textContent).not.toMatch(/could not be displayed|could not be rendered/i);
       expect(screen.queryByText(/was skipped because the tutor/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/omitted because/i)).not.toBeInTheDocument();
     });
   }
 });

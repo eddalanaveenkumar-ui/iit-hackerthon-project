@@ -1,5 +1,6 @@
 import { Component } from 'react';
 import { AlertTriangle, RotateCcw } from 'lucide-react';
+import { clearChunkReloadFlag, isChunkLoadError, reloadForChunkError } from './chunkReload';
 
 /**
  * RENDERER ERROR BOUNDARY
@@ -31,12 +32,29 @@ export default class RendererErrorBoundary extends Component {
     if (typeof console !== 'undefined') {
       console.warn('[DynamicRenderer] component failed:', this.props.componentType, error?.message, info?.componentStack?.split('\n')[1]?.trim());
     }
+
+    // A renderer that failed to *load* is not a rendering problem, and "Retry"
+    // cannot fix it: the browser is asking for a file that this deploy does not
+    // have, so it will get the same answer. Reload once to pick up the current
+    // build's chunk names. Guarded, so a genuinely broken chunk settles.
+    if (isChunkLoadError(error) && reloadForChunkError()) {
+      this.setState({ reloading: true });
+    }
+  }
+
+  componentDidMount() {
+    // Reached the page and rendered — any earlier reload worked, so a future
+    // deploy is allowed to trigger another one.
+    clearChunkReloadFlag();
   }
 
   render() {
-    const { error } = this.state;
+    const { error, reloading } = this.state;
     const { children, componentType, onRetry } = this.props;
     if (!error) return children;
+
+    // Mid-reload: show nothing rather than an error the learner cannot act on.
+    if (reloading) return null;
 
     return (
       <div
@@ -50,7 +68,9 @@ export default class RendererErrorBoundary extends Component {
               This {String(componentType || 'section').replace(/_/g, ' ')} could not be displayed
             </p>
             <p className="mt-0.5 text-xs text-amber-800 dark:text-amber-300">
-              The rest of the lesson is still available. You can retry this section or continue.
+              {isChunkLoadError(error)
+                ? 'This section did not finish loading. Reload the page to pick up the current version.'
+                : 'The rest of the lesson is still available. You can retry this section or continue.'}
             </p>
           </div>
           <button
