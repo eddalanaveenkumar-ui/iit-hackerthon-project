@@ -6,6 +6,7 @@ import { localEvaluateAnswers } from '../ai/ui/teaching-engine.js';
 import { gradeCodingAnswers, applyExecutionVerdicts } from '../learning/code-grading.js';
 import { executeCode, runtimeAvailability } from '../../utils/sandbox.js';
 import { factsFor, languageFor } from './question-bank.js';
+import { tutorialLesson, genericLesson } from './lesson-content.js';
 
 /**
  * TRACS ENGINE
@@ -1258,51 +1259,83 @@ function normalizeDocument(raw) {
 }
 
 /**
- * A plain description of a concept from its name alone.
- *
- * Used when the syllabus named the concept but said nothing about it — the usual
- * shape of a real syllabus, which is a list of topics and no prose. "Variables
- * and Primitive Types" becomes a sentence about the three things its name
- * promises; anything unparseable becomes a prompt to work the example out, which
- * is still more useful than an apology.
- */
-export function describeConcept(title) {
-  const name = String(title || '').trim();
-  if (!name) return 'This concept is named in your syllabus but has no description.';
-  return `**${name}** is one of the topics in your syllabus, and this syllabus does not spell it out. Start from a case you already understand, write down what changes when it is involved, and check that rule against a second example.`;
-}
-
-/**
  * The explanation used when the model is unavailable, or returned something the
- * protocol rejected. It is deliberately plain — a definition, the syllabus's own
- * words, and a worked structure — because a learner is better served by a short
- * honest explanation than by a broken rich one.
+ * protocol rejected.
+ *
+ * This used to collapse to a single sentence reconstructed from the topic's name
+ * — "Conditional Statements is one of the topics in your syllabus, and this
+ * syllabus does not spell it out" — and a learner said so: the lesson told them
+ * nothing and stopped. A syllabus names topics; it does not teach them. So the
+ * fallback now *is* the lesson: a curated tutorial where one exists
+ * (`tutorials.js`), and a structured walk-through otherwise. Nothing here is
+ * ever one sentence.
  */
-export function localExplanation(topic, { reTeach = false } = {}) {
+export function localExplanation(topic, { reTeach = false, language = 'python' } = {}) {
   const summary = String(topic.summary || '').slice(0, 1000);
   const keywords = (topic.keywords || []).slice(0, 8);
 
-  const components = [
-    {
-      id: 'learning_local',
+  // A curated tutorial, when the concept is one we can actually teach. The
+  // learner gets a structured lesson with worked, runnable examples instead of
+  // one sentence reconstructed from the topic's name.
+  const taught = tutorialLesson(topic, { language });
+
+  if (taught) {
+    const components = [...taught];
+
+    // A re-teach is a second attempt at the *same* idea, so it must not open
+    // with the paragraph the learner just read and bounce off. It leads with a
+    // different entry point — the worked example, not the definition — and the
+    // full tutorial follows for anyone who wants to re-read it.
+    if (reTeach) {
+      const first = taught[0];
+      const opening = {
+        ...first,
+        id: 'learn_local_reteach_first',
+        title: `Let's come at ${topic.title} from a different side`,
+        objectives: undefined,
+        sections: [
+          {
+            heading: 'Start with the code, not the definition',
+            body: `Read this and predict what it prints before you run it. ${keywords.length ? `The pieces to keep straight are ${keywords.map((k) => `**${k}**`).join(', ')}. ` : ''}If you can predict it, you have the idea — the rest is vocabulary.`,
+          },
+          ...first.sections.slice(2, 4),
+        ],
+        key_points: undefined,
+      };
+      components.unshift(opening);
+    }
+
+    // The syllabus may say something about this topic that the tutorial does
+    // not — keep it, attributed, rather than dropping a teacher's own words.
+    if (summary) {
+      components.push({
+        id: 'learn_local_syllabus',
+        type: 'learning',
+        title: 'From your syllabus',
+        sections: [{ heading: topic.title, body: summary }],
+      });
+    }
+
+    return makeDocument(components, { topic: topic.title });
+  }
+
+  // No tutorial for this concept: a structured walk-through, not a sentence.
+  const components = genericLesson(topic, { language });
+
+  if (keywords.length) {
+    components.push({
+      id: 'learn_local_keywords',
       type: 'learning',
-      title: topic.title,
+      title: 'The ideas it involves',
       sections: [
         {
-          heading: reTeach ? 'A different way to see it' : 'What it is',
-          // A syllabus that lists concepts as bare bullets has no prose to
-          // quote, and saying so was both unhelpful and a promise the app could
-          // not keep. Say what the concept is *from its name* instead, and name
-          // the parts it is made of when the name contains them.
-          body: summary || describeConcept(topic.title),
+          heading: 'What to be able to say about each',
+          body: keywords.map((k) => `**${k}**`).join(', '),
         },
-        ...(keywords.length
-          ? [{ heading: 'The ideas it involves', body: keywords.map((k) => `**${k}**`).join(', ') }]
-          : []),
       ],
-      key_points: keywords.length ? keywords.slice(0, 5).map((k) => `Be able to explain ${k} in your own words.`) : [],
-    },
-  ];
+      key_points: keywords.slice(0, 5).map((k) => `Be able to explain ${k} in your own words.`),
+    });
+  }
 
   if (keywords.length >= 3) {
     components.push({

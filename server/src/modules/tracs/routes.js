@@ -375,14 +375,20 @@ router.post(
         if (!concept) throw badRequest('This unit has no concepts to explain.');
 
         const topic = topics.find((t) => t.id === concept.id) || { id: concept.id, title: concept.title, summary: '' };
+        // Coming back to the concept that was just explained means the first
+        // explanation did not land, so this one opens from a different side
+        // rather than repeating the paragraph the learner already bounced off.
+        const reTeach = session.learnTopicId === concept.id;
         const explanation = await authorExplanation({
           topic,
           syllabusExcerpt: excerptFor(session, topic),
           userId: req.userId,
+          reTeach,
         });
 
         session.mode = 'learn';
         session.learnTopicId = concept.id;
+        session.taughtConcepts = [...new Set([...(session.taughtConcepts || []), concept.id])];
         // A round from an earlier visit is abandoned rather than left to be
         // graded against questions the learner has moved past.
         session.openQuestion = null;
