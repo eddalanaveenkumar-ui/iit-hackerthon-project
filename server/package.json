@@ -18,7 +18,8 @@
     "test:tracs": "node tests/tracs.mjs",
     "test:tracs-live": "node tests/run-tracs-live.mjs",
     "test:admin": "node tests/admin-account.mjs",
-    "test:units": "node tests/tracs-units.mjs"
+    "test:units": "node tests/tracs-units.mjs",
+    "test:adaptive": "node tests/tracs-adaptive.mjs"
   },
   "dependencies": {
     "@lossless.org/nosqldb": "^11.0.0",

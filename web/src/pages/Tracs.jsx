@@ -484,7 +484,7 @@ export default function Tracs() {
   /* ------------------------------- actions ------------------------------ */
 
   const send = useCallback(
-    async ({ command, answer, answers, questionId, optimistic }) => {
+    async ({ command, answer, answers, questionId, topicId, optimistic }) => {
       if (!sessionId) return { ok: false };
       setBusy(true);
       const stamp = Date.now();
@@ -496,7 +496,7 @@ export default function Tracs() {
         ]);
       }
       try {
-        const result = await sendTracsTurn(sessionId, { command, answer, answers, question_id: questionId });
+        const result = await sendTracsTurn(sessionId, { command, answer, answers, question_id: questionId, topic_id: topicId });
         setSession(result.session);
         setMessages((current) => [
           ...current.filter((entry) => !entry.pending),
@@ -546,7 +546,13 @@ export default function Tracs() {
           const command = named === 'learn' || named === 'test'
             ? named
             : (session?.mode === 'learn' ? 'learn' : 'test');
-          return send({ command, optimistic: `/${command}` });
+          // A tracs button can name the concept it means — "Learn next topic:
+          // Loops" has to explain Loops, not whatever the server would pick.
+          return send({
+            command,
+            topicId: metadata?.topic_id || undefined,
+            optimistic: metadata?.label ? String(metadata.label) : `/${command}`,
+          });
         },
       }),
       submitAnswers: async (formId, payload) => {

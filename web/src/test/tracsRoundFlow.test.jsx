@@ -4,100 +4,98 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
 /**
- * THE WHOLE STUDY LOOP, THROUGH THE REAL PAGE
- * ==========================================
+ * THE STUDY LOOP, THROUGH THE REAL PAGE
+ * =====================================
  *
- * The unit tests cover the review panel and the server covers the loop, but
- * neither would have caught the bug this file was written for: the page sent
- * only `answers[0]` of a round, so a nine-question form submitted one answer and
- * eight questions were never sent.
+ * Two flows, and this file exists because testing the server and the panel
+ * separately never caught what the page in between was doing:
  *
- * So this mounts the actual page with the API mocked and follows a learner from
- * the uploaded syllabus through Learn, a round, the diagnosis and the retest.
+ *   learn  one concept explained, then two buttons — next concept, or test it
+ *   test   one question at a time, nothing revealed until the summary
+ *
+ * A button has to carry the concept it names. "Learn next topic: Loops" that
+ * sends no topic id is a button that explains whatever the server picks, which
+ * is how the whole feature quietly stops working while every unit test passes.
  */
 
 const UNITS = [
   {
     index: 1,
-    title: 'Java Fundamentals',
+    title: 'Python Basics',
     concepts: [
-      { id: 't1', title: 'Variables and Primitive Types' },
-      { id: 't2', title: 'Conditionals' },
+      { id: 't1', title: 'Variables' },
+      { id: 't2', title: 'Loops' },
     ],
   },
-  { index: 2, title: 'Object Orientation', concepts: [{ id: 't3', title: 'Classes and Objects' }] },
+  { index: 2, title: 'Object Orientation', concepts: [{ id: 't3', title: 'Classes' }] },
 ];
 
-// A round exactly as the server builds it — this fixture is copied from a real
-// `/learn` response rather than hand-written, because a hand-written one drifted
-// from the schema (a stray `form_id` is enough to make the renderer drop the
-// whole form) and hid what was being tested.
-const round = (count, prefix = 'Q') => ({
-  id: 'round-form',
+const oneQuestion = (n, concept = 'Variables') => ({
+  id: `form_q${n}`,
   type: 'question_form',
-  title: 'Java Fundamentals — ' + count + ' questions',
-  description: 'Answer all of them, then submit once. The whole round is marked together.',
-  questions: Array.from({ length: count }, (_, i) => ({
-    id: `${prefix}${i + 1}`,
-    type: 'radio',
-    question: `${prefix}${i + 1} — which one is correct?`,
-    required: true,
-    // Plain strings, as the server emits them; `normaliseOptions` handles both.
-    options: ['Alpha', 'Beta'],
-  })),
-  submission: { button_text: `Submit ${count} answers`, action: 'submit_ai_questions', evaluation: 'ai_evaluation' },
+  title: concept,
+  description: `Question ${n}?`,
+  questions: [
+    {
+      id: `Q${n}`,
+      type: 'radio',
+      question: `Question ${n} about ${concept}?`,
+      required: true,
+      options: ['Alpha', 'Beta'],
+    },
+  ],
+  submission: { button_text: 'Submit answer', action: 'submit_ai_questions', evaluation: 'ai_evaluation' },
+});
+
+const explanation = (concept, nextTitle) => ({
+  version: '1.0',
+  response_id: `r_${concept.id}`,
+  response_type: 'educational_tutorial',
+  components: [
+    { id: 'x1', type: 'text', content: `**Python Basics** → **${concept.title}**` },
+    { id: 'x2', type: 'text', content: `${concept.title} is a name bound to a value.` },
+    {
+      id: `after_${concept.id}`,
+      type: 'actions',
+      title: 'Where next',
+      actions: [
+        { id: 'test_this_topic', label: `Test this topic: ${concept.title}`, action: 'continue_lesson', command: 'test', topic_id: concept.id, tone: 'brand' },
+        ...(nextTitle
+          ? [{ id: 'learn_next_topic', label: `Learn next topic: ${nextTitle.title}`, action: 'continue_lesson', command: 'learn', topic_id: nextTitle.id }]
+          : []),
+      ],
+    },
+  ],
 });
 
 const session = (overrides = {}) => ({
   id: 'sess-1',
-  title: 'Java',
+  title: 'Python',
   mode: 'test',
   messages: [],
   units: UNITS,
-  syllabus_markdown: '### Unit 1: Java Fundamentals\n\n- Variables and Primitive Types',
   ...overrides,
 });
 
 const calls = [];
 vi.mock('../lib/tracs', () => ({
-  uploadTracsSyllabus: vi.fn(async () => {
-    calls.push(['upload']);
-    return { ok: true, session: session({ messages: [] }), units: UNITS, syllabus_markdown: '### Unit 1: Java Fundamentals' };
-  }),
+  uploadTracsSyllabus: vi.fn(async () => ({ ok: true, session: session(), units: UNITS })),
   fetchTracsSession: vi.fn(async () => ({ session: session(), units: UNITS })),
   listTracsSessions: vi.fn(async () => ({ sessions: [] })),
   deleteTracsSession: vi.fn(async () => ({ ok: true })),
   chooseTracsUnit: vi.fn(async (_id, unit) => {
     calls.push(['chooseUnit', unit]);
-    return {
-      ok: true,
-      unit,
-      session: session({ mode: 'unit_chosen', selected_unit: { title: 'Java Fundamentals', index: 1 } }),
-      choices: [{ id: 'learn', command: 'learn' }, { id: 'test', command: 'test' }],
-    };
+    return { ok: true, session: session({ mode: 'unit_chosen', selected_unit: { title: 'Python Basics', index: 1 } }) };
   }),
   sendTracsTurn: vi.fn(async (_id, payload) => {
     calls.push(['turn', payload]);
     if (payload.command === 'learn') {
-      return {
-        ok: true,
-        outcome: 'explained',
-        document: {
-          components: [
-            { type: 'text', id: 'x1', content: 'A variable is a name for a value.' },
-            round(5),
-          ],
-        },
-        session: session({ mode: 'learn', messages: [] }),
-      };
+      const concept = payload.topic_id === 't2' ? UNITS[0].concepts[1] : UNITS[0].concepts[0];
+      return { ok: true, outcome: 'explained', document: explanation(concept, concept.id === 't1' ? UNITS[0].concepts[1] : null), session: session() };
     }
-    return {
-      ok: true,
-      outcome: 'round_diagnosed',
-      diagnosis: { total: 5, correct: 3, misses: [], unjudged: [] },
-      document: { components: [{ type: 'text', id: 'd1', content: 'Three of five were wrong.' }] },
-      session: session({ messages: [] }),
-    };
+    // The adaptive test: one question per turn, no verdict anywhere.
+    const n = (calls.filter(([k, p]) => k === 'turn' && p.command === 'test').length);
+    return { ok: true, outcome: 'question', document: { version: '1.0', response_id: 'q', response_type: 'question_form', components: [oneQuestion(n)] }, session: session() };
   }),
 }));
 
@@ -116,98 +114,90 @@ const renderPage = () =>
     </ToastProvider>,
   );
 
+/** Upload and pick the first unit, leaving the page on the Learn/Test choice. */
+async function openUnit() {
+  renderPage();
+  await userEvent.type(document.querySelector('textarea'), '### Unit 1: Python Basics\n- Variables');
+  await userEvent.click(screen.getByRole('button', { name: /start tracs/i }));
+  await waitFor(() => expect(document.body.textContent).toMatch(/2 units/));
+  await userEvent.click(screen.getAllByRole('button', { name: /Choose/ })[0]);
+  await waitFor(() => expect(screen.getByRole('button', { name: /Learn/ })).toBeTruthy());
+}
+
 beforeEach(() => {
   calls.length = 0;
 });
 
 describe('the study loop through the page', () => {
-  it('shows the extracted syllabus after an upload, before any question', async () => {
-    const { container } = renderPage();
-
-    // There is no file to pick in jsdom, so drive the text path the page uses.
-    const textarea = container.querySelector('textarea');
-    expect(textarea).toBeTruthy();
-    await userEvent.type(textarea, '### Unit 1: Java Fundamentals\n- Variables and Primitive Types');
-    const upload = screen.getByRole('button', { name: /start tracs/i });
-    expect(upload).toBeTruthy();
-    await userEvent.click(upload);
-
-    await waitFor(() => expect(document.body.textContent).toMatch(/2 units · 3 concepts/));
-    // Both units, each with its own concepts — the label and the title are
-    // separate nodes, so match the panel's text rather than one element.
-    const text = document.body.textContent.replace(/\s+/g, ' ');
-    expect(text).toContain('Unit 1: Java Fundamentals');
-    expect(text).toContain('Unit 2: Object Orientation');
-    expect(text).toContain('Variables and Primitive Types');
-    expect(text).toContain('Classes and Objects');
-    // And nothing has been asked yet.
-    expect(screen.queryByText(/which one is correct/i)).toBeNull();
-  });
-
-  it('offers Learn and Test for the chosen unit, and sends the unit with them', async () => {
+  it('shows the extracted syllabus before any question', async () => {
     renderPage();
-    const textarea = document.querySelector('textarea');
-    await userEvent.type(textarea, '### Unit 1: Java Fundamentals\n- Variables and Primitive Types');
+    await userEvent.type(document.querySelector('textarea'), '### Unit 1: Python Basics\n- Variables');
     await userEvent.click(screen.getByRole('button', { name: /start tracs/i }));
 
-    await waitFor(() => expect(document.body.textContent).toMatch(/2 units · 3 concepts/));
-
-    // First click: which unit. Second click: Learn or Test. A unit is not
-    // started, and no question is asked, until the mode is chosen.
-    await userEvent.click(screen.getAllByRole('button', { name: /Choose/ })[0]);
-    expect(calls.some(([k]) => k === 'chooseUnit')).toBe(false);
-
-    await waitFor(() => expect(screen.getByRole('button', { name: /Learn/ })).toBeTruthy());
-    expect(screen.getByRole('button', { name: /Test/ })).toBeTruthy();
-
-    await userEvent.click(screen.getByRole('button', { name: /Test/ }));
-    await waitFor(() => expect(calls.some(([k]) => k === 'chooseUnit')).toBe(true));
-    // The unit is named by title, and the mode is sent as the turn's command.
-    expect(calls.find(([k]) => k === 'chooseUnit')[1]).toBe('Java Fundamentals');
-    expect(calls.find(([k, p]) => k === 'turn' && p.command === 'test')).toBeTruthy();
+    await waitFor(() => expect(document.body.textContent).toMatch(/2 units/));
+    const text = document.body.textContent.replace(/\s+/g, ' ');
+    expect(text).toContain('Unit 1: Python Basics');
+    expect(text).toContain('Unit 2: Object Orientation');
+    expect(text).not.toMatch(/Question \d+ about/);
   });
 
-  it('submits every answer in the round, not just the first', async () => {
-    renderPage();
-    const textarea = document.querySelector('textarea');
-    await userEvent.type(textarea, '### Unit 1: Java Fundamentals\n- Variables and Primitive Types');
-    const upload = screen.getByRole('button', { name: /start tracs/i });
-    await userEvent.click(upload);
-    await waitFor(() => expect(document.body.textContent).toMatch(/2 units · 3 concepts/));
-
-    await userEvent.click(screen.getAllByRole('button', { name: /Choose/ })[0]);
-    await waitFor(() => expect(screen.getByRole('button', { name: /Learn/ })).toBeTruthy());
+  it('explains one concept and offers exactly two ways on', async () => {
+    await openUnit();
     await userEvent.click(screen.getByRole('button', { name: /Learn/ }));
 
-    // The Learn turn comes back with an explanation and a five-question round.
-    await waitFor(() => expect(screen.getByText(/A variable is a name for a value/)).toBeTruthy());
-    await waitFor(() => expect(document.body.textContent).toMatch(/Java Fundamentals — 5 questions/));
+    await waitFor(() => expect(document.body.textContent).toMatch(/Variables is a name bound to a value/));
 
-    // Answer all five, then submit once. One option per question, so the first
-    // radio of each pair.
-    const radios = [...document.querySelectorAll('input[type="radio"]')];
-    expect(radios.length).toBe(10); // two options × five questions
-    for (let i = 0; i < 5; i += 1) {
-      fireEvent.click(radios[i * 2]);
-    }
-    await waitFor(() => expect(document.body.textContent).not.toMatch(/5 required questions left/));
-    const submit = screen.getAllByRole('button').find((b) => /^submit \d+ answers/i.test(b.textContent.trim()));
-    expect(submit).toBeTruthy();
-    await userEvent.click(submit);
+    // Two actions, and neither is a question: an explanation is not a quiz.
+    await waitFor(() => expect(screen.getByRole('button', { name: /Test this topic: Variables/ })).toBeTruthy());
+    const labels = [...document.querySelectorAll('button')].map((b) => b.textContent.trim());
+    expect(labels).toContain('Test this topic: Variables');
+    expect(labels).toContain('Learn next topic: Loops');
+    expect(document.querySelectorAll('input[type="radio"]')).toHaveLength(0);
+  });
 
-    // The Learn turn carries `answers` too (as an empty field), so wait for the
-    // submission itself: the turn that actually carries the five answers.
-    await waitFor(() => expect(calls.some(([k, p]) => k === 'turn' && p.answers?.length === 5)).toBe(true));
-    const turn = calls.find(([k, p]) => k === 'turn' && p.answers?.length === 5)[1];
+  it('sends the concept a button names, not just its command', async () => {
+    await openUnit();
+    await userEvent.click(screen.getByRole('button', { name: /Learn/ }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Learn next topic: Loops/ })).toBeTruthy());
 
-    // The bug this file exists for: this used to be a single `answer` and four
-    // of the five questions were never sent.
-    expect(turn.answer).toBeUndefined();
-    expect(turn.answers.map((a) => a.question_id)).toEqual(['Q1', 'Q2', 'Q3', 'Q4', 'Q5']);
-    expect(turn.answers.every((a) => a.value === 'Alpha')).toBe(true);
-    expect(turn.command).toBe('learn');
+    await userEvent.click(screen.getByRole('button', { name: /Learn next topic: Loops/ }));
 
-    // And the round is answered, not still nagging for input.
-    await waitFor(() => expect(document.body.textContent).not.toMatch(/required questions? left/));
+    await waitFor(() => expect(calls.some(([k, p]) => k === 'turn' && p.topic_id === 't2')).toBe(true));
+    const learn = calls.filter(([k, p]) => k === 'turn' && p.topic_id === 't2').pop()[1];
+    // The bug this guards: a button with no topic id explains whatever the
+    // server would have picked, so "next topic" shows the same topic again.
+    expect(learn.command).toBe('learn');
+    expect(learn.topic_id).toBe('t2');
+    await waitFor(() => expect(document.body.textContent).toMatch(/Loops is a name bound to a value/));
+  });
+
+  it('asks the test one question at a time and reveals no verdict', async () => {
+    await openUnit();
+    await userEvent.click(screen.getByRole('button', { name: /Test/ }));
+
+    await waitFor(() => expect(document.body.textContent).toMatch(/Question 1 about/));
+    // Exactly one question on screen.
+    expect(document.querySelectorAll('input[type="radio"]')).toHaveLength(2);
+
+    fireEvent.click(document.querySelectorAll('input[type="radio"]')[0]);
+    fireEvent.click([...document.querySelectorAll('button')].find((b) => /submit/i.test(b.textContent)));
+
+    // The next question arrives, and nothing has been said about the last one.
+    await waitFor(() => expect(document.body.textContent).toMatch(/Question 2 about/));
+    const text = document.body.textContent;
+    expect(text).not.toMatch(/correct|incorrect|misconception|knowledge gap|practical difficulty/i);
+    expect(text).not.toMatch(/Question 1 about/);
+  });
+
+  it('keeps "Test this topic" pointed at the concept being explained', async () => {
+    await openUnit();
+    await userEvent.click(screen.getByRole('button', { name: /Learn/ }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Test this topic: Variables/ })).toBeTruthy());
+    await userEvent.click(screen.getByRole('button', { name: /Test this topic: Variables/ }));
+
+    await waitFor(() => expect(calls.some(([k, p]) => k === 'turn' && p.command === 'test')).toBe(true));
+    const turn = calls.find(([k, p]) => k === 'turn' && p.command === 'test')[1];
+    expect(turn.topic_id).toBe('t1');
+    await waitFor(() => expect(document.body.textContent).toMatch(/Question 1 about/));
   });
 });
