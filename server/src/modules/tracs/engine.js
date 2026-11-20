@@ -1632,7 +1632,7 @@ export function diagnosisReport({ results = [], questions = [] } = {}) {
     })
     .join(', ');
 
-  components.push(say(`**Where this round went wrong:** ${summary}. Each one is broken down below, then the same ideas come back as new questions.`));
+  components.push(say(`**What the test found:** ${summary}. Each one is broken down below, with what it means for this concept.`));
 
   misses.forEach((miss, index) => {
     const lines = [

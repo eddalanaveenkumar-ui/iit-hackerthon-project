@@ -415,7 +415,23 @@ const diagramComponent = z.strictObject({
   order: z.array(z.string().regex(ID_RE)).max(UI_LIMITS.maxDiagramNodes).optional(),
 });
 
-const actionsComponent = z.strictObject({ ...base, type: z.literal('actions'), actions: z.array(z.strictObject({ id, label: short, action: z.enum(UI_ACTIONS), tone: tone.optional(), target: z.enum(NAV_TARGETS).optional(), confirm: optShort })).min(1).max(6) });
+// `command` and `topic_id` are how a tracs button says what it means: which of
+// /learn or /test it runs, and which concept it acts on. Both were missing from
+// this schema, and a `strictObject` rejects unknown keys — so every tracs action
+// button failed validation and the whole `actions` block was dropped. The
+// explanation rendered with nothing to click, for every explanation.
+const actionItemSchema = z.strictObject({
+  id,
+  label: short,
+  action: z.enum(UI_ACTIONS),
+  tone: tone.optional(),
+  target: z.enum(NAV_TARGETS).optional(),
+  confirm: optShort,
+  command: z.enum(['test', 'learn']).optional(),
+  topic_id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/).optional(),
+});
+
+const actionsComponent = z.strictObject({ ...base, type: z.literal('actions'), actions: z.array(actionItemSchema).min(1).max(6) });
 
 const progressComponent = z.strictObject({
   ...base,

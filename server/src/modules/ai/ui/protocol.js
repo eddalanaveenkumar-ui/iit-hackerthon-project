@@ -721,6 +721,10 @@ const actionsComponent = z.strictObject({
         // button labelled "/learn" asked a question. Carrying it explicitly (and
         // allowing it through the schema) removes the guess.
         command: z.enum(['test', 'learn']).optional(),
+        // Which concept the button acts on. A tracs unit explains and tests one
+        // concept at a time, so "learn next topic" has to name the topic it
+        // means — without this the button could only ever mean "the first one".
+        topic_id: z.string().regex(ID_RE).optional(),
       }),
     )
     .min(1)
