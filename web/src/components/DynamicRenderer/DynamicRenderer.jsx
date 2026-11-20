@@ -163,8 +163,12 @@ export default function DynamicRenderer({
         {renderFooter ? renderFooter(document) : null}
 
         {validation.dropped?.length ? (
+          // Neutral wording on purpose. This message used to blame "the tutor's
+          // response" for every dropped component, which was often untrue — a
+          // renderer that failed to load produced the same note, and the note
+          // sent people looking for a content bug that did not exist.
           <p className="text-[11px] text-slate-400" role="note">
-            {validation.dropped.length} section{validation.dropped.length > 1 ? 's were' : ' was'} skipped because the tutor’s response was malformed.
+            {validation.dropped.length} section{validation.dropped.length > 1 ? 's were' : ' was'} omitted because {validation.dropped.length > 1 ? 'they are' : 'it is'} not supported by this version of the page.
           </p>
         ) : null}
       </article>

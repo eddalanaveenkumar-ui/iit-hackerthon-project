@@ -163,6 +163,9 @@ describe('a long tutorial stays usable', () => {
     };
     render(<DynamicRenderer document={document} actions={{ notify: vi.fn() }} />);
     expect(await screen.findByText(/this section is fine/i)).toBeInTheDocument();
-    expect(screen.getByText(/was skipped/i)).toBeInTheDocument();
+    // Neutral wording: the old note blamed "the tutor's response" for every
+    // dropped section, which was untrue when the cause was a renderer that
+    // failed to load.
+    expect(screen.getByText(/omitted because/i)).toBeInTheDocument();
   });
 });
