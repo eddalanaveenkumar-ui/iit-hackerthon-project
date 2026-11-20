@@ -398,8 +398,12 @@ async function startRound(session, { count = null } = {}) {
 function roundDocument({ round, unit, questions, intro = null }) {
   const components = [];
   if (intro) components.push(say(intro));
+  // One line, and only the things the learner needs to act on: which round,
+  // how many questions, and that it is one submission. The unit name is already
+  // in the form's title, so repeating it here said it twice above a list of
+  // questions that name it a third time.
   components.push(say(
-    `**Round ${round}** — ${questions.length} question${questions.length === 1 ? '' : 's'} across ${unit?.concepts?.length || 1} concept${(unit?.concepts?.length || 1) === 1 ? '' : 's'} in **${unit?.title || 'this unit'}**. Answer them all, then submit once.`,
+    `**Round ${round}** — ${questions.length} question${questions.length === 1 ? '' : 's'}. Answer them all, then submit once.`,
   ));
   components.push(testRoundForm({ questions, topic: { title: unit?.title || 'Test' }, sessionId: 'round' }));
   return makeDocument(components, { responseType: 'assessment', topic: unit?.title || '' });
@@ -577,10 +581,11 @@ async function finishRound(session, { mode, graded, misses, unjudged = [], passe
   // before responding so the learner is not left waiting on a second round trip.
   const { questions, number } = await startRound(session);
   session.mode = mode;
+  // The retest label says only what it has to: which round this is, and how
+  // many questions. "Back to questions" and "nothing above is repeated" are
+  // commentary on the machinery; the questions either are new or they are not.
   components.push(say(
-    mode === 'learn'
-      ? 'That is the idea again, from a different angle. Now the same concepts come back as **new questions** — nothing above is repeated.'
-      : 'Back to questions. These are **new questions on the same concepts**, aimed at the steps that just went wrong.',
+    `**Round ${number}** — ${questions.length} question${questions.length === 1 ? '' : 's'}. Answer them all, then submit once.`,
   ));
   components.push(testRoundForm({ questions, topic: { title: unitTitle }, sessionId: 'retest' }));
 
@@ -645,7 +650,19 @@ router.post(
         const concepts = topics.filter((t) => (session.selectedUnit.concepts || []).includes(t.id));
         const [explanation] = await Promise.all([
           authorExplanation({
-            topic: { ...concepts[0], title: unit?.title || concepts[0]?.title, summary: concepts.map((c) => `${c.title}: ${c.summary}`).join('\n') },
+            // Only concepts with something written under them contribute a
+            // description. A bullet-only syllabus has no prose at all, and
+            // joining every title with an empty summary produced an explanation
+            // whose entire body was "Variables: \nLoops: \nLists:" — titles with
+            // dangling colons and nothing said about any of them.
+            topic: {
+              ...concepts[0],
+              title: unit?.title || concepts[0]?.title,
+              summary: concepts
+                .filter((c) => String(c.summary || '').trim())
+                .map((c) => `${c.title}: ${String(c.summary).trim()}`)
+                .join('\n'),
+            },
             syllabusExcerpt: concepts.map((c) => excerptFor(session, c)).join('\n\n').slice(0, 4000),
             userId: req.userId,
           }),
@@ -653,24 +670,25 @@ router.post(
         const { questions, number } = await startRound(session);
         session.mode = 'learn';
         const document = makeDocument([
-          say(`**${unit?.title || 'This unit'}** — here is the idea from the ground up, then questions on it.`),
+          // The heading names the unit; the explanation follows directly. There
+          // used to be a sentence announcing that an explanation was coming, and
+          // another announcing that questions were coming — both describing the
+          // interface rather than the subject.
+          say(`**${unit?.title || 'This unit'}**`),
           ...(explanation.document.components || []),
-          say(`Now let us see what stuck. **Round ${number}** — ${questions.length} questions across this unit.`),
+          say(`**Round ${number}** — ${questions.length} question${questions.length === 1 ? '' : 's'}. Answer them all, then submit once.`),
           testRoundForm({ questions, topic: { title: unit?.title || 'Test' }, sessionId: 'learn' }),
         ], { responseType: 'educational_tutorial', topic: unit?.title || '' });
         await saveSession(session);
         return res.json({ command: 'learn', outcome: 'explained', document, session: sessionView(session) });
       }
 
-      // Test mode: no explanation. Straight into the round.
+      // Test mode: no explanation, and no commentary about the absence of one.
+      // The learner pressed Test; telling them "this is Test, so there is no
+      // explanation" is a paragraph about the interface, not about the subject.
       const { questions, number } = await startRound(session);
       session.mode = 'test';
-      const document = roundDocument({
-        round: number,
-        unit,
-        questions,
-        intro: `**${unit?.title || 'This unit'}** — straight to questions. No explanation, that is the point of Test.`,
-      });
+      const document = roundDocument({ round: number, unit, questions });
       await saveSession(session);
       return res.json({ command: 'test', outcome: 'question', document, session: sessionView(session) });
     }
