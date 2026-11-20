@@ -27,6 +27,9 @@ import {
   nextConceptAfter,
   conceptToLearn,
 } from '../src/modules/tracs/topics-flow.js';
+import { localExplanation } from '../src/modules/tracs/engine.js';
+import { TUTORIALS, findTutorial } from '../src/modules/tracs/tutorials.js';
+import { tutorialLesson, genericLesson } from '../src/modules/tracs/lesson-content.js';
 
 let passed = 0;
 const failures = [];
@@ -188,6 +191,183 @@ console.log('\nLearn explains one concept and offers exactly two ways on');
 {
   // A stale or invented topic id must not crash the turn.
   equal('an unknown topic falls back rather than throwing', conceptToLearn({ unit: UNIT, topics: [], topicId: 'nope' }).id, 'c1');
+}
+
+/* -------------------------------------------------------------------------- */
+/* the explanation has to actually teach                                      */
+/* -------------------------------------------------------------------------- */
+//
+// This suite used to check the *flow* of /learn and nothing about its content,
+// and the content had quietly collapsed to a single sentence reconstructed from
+// the topic's name. A learner reported exactly that: the lesson told them the
+// topic was "one of the topics in your syllabus" and stopped. These checks fail
+// if a lesson ever gets that thin again.
+
+const countSections = (components) =>
+  (components || []).reduce((total, c) => total + (c.sections || []).length, 0);
+const lessonText = (components) => JSON.stringify(components ?? null);
+// A fence around nothing is not a code example, so empty blocks do not count.
+const codeBlocks = (components) => {
+  const blocks = lessonText(components).match(/```[a-z]*\\n([\s\S]*?)```/g) || [];
+  return blocks.filter((block) => block.replace(/```[a-z]*|```/g, '').trim().length > 0).length;
+};
+
+{
+  // The complaint, as a test: "Conditional Statements" gets a real tutorial.
+  const components = tutorialLesson({ title: 'Conditional Statements' });
+  check('a curated concept produces components', Array.isArray(components) && components.length > 0);
+  check('the lesson has many sections, not one', countSections(components) >= 8, `${countSections(components)} sections`);
+  check('the lesson carries real code examples', codeBlocks(components) >= 3, `${codeBlocks(components)} blocks`);
+  check('worked examples show what the code prints', lessonText(components).includes('**Output**'));
+  check('it says what the concept is', lessonText(components).includes('What it is'));
+  check('it says why the concept exists', lessonText(components).includes('Why it exists'));
+  check('it shows the syntax', lessonText(components).includes('The syntax'));
+  check('it names the mistakes people make', lessonText(components).includes('Where it goes wrong'));
+  check('it tells the learner how to check themselves', lessonText(components).includes('Check yourself'));
+  check('no section is the old apology sentence', !lessonText(components).includes('does not spell it out'));
+  check('the lesson is substantial, not a paragraph', lessonText(components).length > 3000, `${lessonText(components).length} chars`);
+}
+
+{
+  // Every curated tutorial must be usable, not just the one that was reported.
+  for (const tutorial of TUTORIALS) {
+    check(`${tutorial.label}: has an explanation`, Boolean(tutorial.what && tutorial.why));
+    check(`${tutorial.label}: has at least two worked examples`, (tutorial.examples || []).length >= 2);
+    check(`${tutorial.label}: has at least one trap`, (tutorial.traps || []).length >= 1);
+    check(`${tutorial.label}: has a self-check`, Boolean(tutorial.check));
+  }
+
+  // A tutorial whose "why" is empty teaches a name and nothing else.
+  const hollow = TUTORIALS.filter((t) => !t.what || !t.why || !t.syntax || !t.check);
+  check('no tutorial is a stub', hollow.length === 0, hollow.map((t) => t.label).join(', '));
+
+  // An example with an empty code block is a claim with no evidence.
+  const emptyCode = TUTORIALS.flatMap((t) =>
+    [...t.examples, ...t.traps]
+      .filter((e) => !String(e.code || '').trim())
+      .map((e) => `${t.label}: ${e.title}`));
+  check('every example carries real code', emptyCode.length === 0, emptyCode.join(', '));
+
+  // Where a program is shown, saying what it prints is what makes it verifiable.
+  const noOutput = TUTORIALS.flatMap((t) =>
+    t.examples.filter((e) => !String(e.output || '').trim() && !/Error|TypeError/.test(e.why))
+      .map((e) => `${t.label}: ${e.title}`));
+  check('every runnable example says what it prints', noOutput.length === 0, noOutput.join(', '));
+}
+
+{
+  // A syllabus names topics in its own words; matching on wording alone would
+  // miss them. These are the phrasings a real syllabus uses.
+  const phrasings = {
+    'Conditional Statements': 'Conditionals',
+    'If-Else Statements': 'Conditionals',
+    Conditionals: 'Conditionals',
+    Loops: 'Loops',
+    'Loops and Iteration': 'Loops',
+    'For and While Loops': 'Loops',
+    'Variables and Data Types': 'Variables and data types',
+    Functions: 'Functions',
+    'Defining Functions': 'Functions',
+    'Classes and Objects': 'Classes and objects',
+    Inheritance: 'Inheritance',
+    Polymorphism: 'Inheritance',
+    'Lists and Dictionaries': 'Lists and arrays',
+    Arrays: 'Lists and arrays',
+    'Error Handling': 'Errors and exceptions',
+    'File Handling': 'Input and output',
+    'Recursion and Backtracking': 'Recursion',
+    'Searching and Sorting': 'Searching and sorting',
+    'Stacks and Queues': 'Stacks and queues',
+    'Queues': 'Stacks and queues',
+    'Linked Lists': 'Lists and arrays',
+  };
+  for (const [title, expected] of Object.entries(phrasings)) {
+    const found = findTutorial(title);
+    equal(`"${title}" is recognised`, found?.label ?? null, expected);
+  }
+
+  // A broad container name ("Data Structures") is not one concept, so it is
+  // allowed to fall back — but the fallback still has to be a lesson.
+  const broad = findTutorial('Data Structures');
+  check('a broad container name falls back rather than mismatching', broad === null);
+  check('the fallback for a broad name still teaches',
+    countSections(genericLesson({ title: 'Data Structures', keywords: ['stack', 'queue'] })) >= 4);
+}
+
+{
+  // A concept with no curated tutorial still has to be a lesson, not a sentence.
+  const components = genericLesson({ title: 'Recursion and Backtracking', keywords: ['base case', 'recursive call'] });
+  check('an unknown concept still gets sections', countSections(components) >= 4, `${countSections(components)} sections`);
+  check('an unknown concept still gets a worked case', codeBlocks(components) >= 1);
+  check('an unknown concept is never the apology sentence', !lessonText(components).includes('does not spell it out'));
+
+  // And with nothing to go on at all, it must not crash or return nothing.
+  const bare = genericLesson({ title: 'Something New', keywords: [] });
+  check('a bare concept still produces sections', countSections(bare) >= 3, `${countSections(bare)} sections`);
+}
+
+{
+  // End to end through the function the routes actually call.
+  const doc = localExplanation({ title: 'Conditional Statements' });
+  const components = doc.components || [];
+  check('localExplanation returns a document', components.length > 0);
+  check('localExplanation teaches, it does not summarise', countSections(components) >= 8, `${countSections(components)} sections`);
+  check('localExplanation includes code', codeBlocks(components) >= 3, `${codeBlocks(components)} blocks`);
+
+  // A concept with no tutorial goes through the generic path, never the one-liner.
+  const unknown = localExplanation({ title: 'Quantum Tracing' });
+  check('an unknown concept is still multiple sections', countSections(unknown.components) >= 4);
+  check('an unknown concept is never a single sentence',
+    lessonText(unknown.components).length > 800, `${lessonText(unknown.components).length} chars`);
+}
+
+{
+  // The syllabus's own words are kept, but attributed — not passed off as the
+  // whole explanation, which is what made the lesson look empty.
+  const doc = localExplanation({ title: 'Conditional Statements', summary: 'Covers if, elif and else.' });
+  const syllabus = (doc.components || []).find((c) => c.id === 'learn_local_syllabus');
+  check('the syllabus note survives', Boolean(syllabus));
+  check('the syllabus note is not the whole lesson', (doc.components || []).length > 1);
+}
+
+{
+  // Re-teaching after a miss must add something, not repeat the lesson verbatim.
+  const plain = localExplanation({ title: 'Loops' });
+  const reTeach = localExplanation({ title: 'Loops' }, { reTeach: true });
+  check('re-teaching adds a section', (reTeach.components || []).length > (plain.components || []).length);
+}
+
+{
+  // Every concept in a unit must be reachable and teachable — this is the sweep
+  // a learner's syllabus actually walks, driven through the real entry points
+  // rather than a hand-picked title.
+  const syllabus = [
+    'Variables and Data Types', 'Operators and Expressions', 'Conditional Statements',
+    'Loops and Iteration', 'Functions', 'Lists and Tuples', 'Dictionaries and Sets',
+    'Strings', 'Classes and Objects', 'Inheritance', 'Error Handling', 'File Handling',
+    'Recursion and Backtracking', 'Searching and Sorting', 'Stacks and Queues',
+  ];
+  const thin = [];
+  for (const title of syllabus) {
+    const doc = localExplanation({ title });
+    const sections = countSections(doc.components);
+    if (sections < 6 || codeBlocks(doc.components) < 3) {
+      thin.push(`${title}: ${sections} sections / ${codeBlocks(doc.components)} blocks`);
+    }
+  }
+  check('a full syllabus never produces a thin lesson', thin.length === 0, thin.join('; '));
+}
+
+{
+  // A lesson is read in a chat pane, so it must not be a wall of unbroken prose:
+  // the renderer needs headings and fenced code to break it up.
+  const doc = localExplanation({ title: 'Conditional Statements' });
+  const taught = doc.components.filter((c) => c.type === 'learning');
+  check('the lesson is split across several blocks', taught.length >= 3, `${taught.length} blocks`);
+  const headings = taught.flatMap((c) => (c.sections || []).map((s) => s.heading));
+  check('no two sections share a heading', new Set(headings).size === headings.length);
+  const longest = Math.max(...taught.flatMap((c) => (c.sections || []).map((s) => s.body.length)));
+  check('no single section is an unreadable wall', longest < 3000, `${longest} chars`);
 }
 
 /* -------------------------------------------------------------------------- */
