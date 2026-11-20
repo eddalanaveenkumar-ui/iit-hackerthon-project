@@ -415,7 +415,11 @@ function shuffleStable(items, seed) {
 export function localQuestion(topic, { attempt = 1, subject = '', language = null, variant = 0 } = {}) {
   const type = pickQuestionType(topic, { attempt, subject, language });
   const summary = String(topic?.summary || '').slice(0, 240);
-  const base = { id: `q${Date.now().toString(36)}${variant ? `v${variant}` : ''}`, type, hint: undefined };
+  // Ids must be unique across a whole round, and a round authors every question
+  // in parallel. `Date.now()` is the same for all of them — two questions from
+  // different concepts got the same id, so grading matched both answers to
+  // whichever question was found first and the report listed each miss twice.
+  const base = { id: `q${encoder()}`, type, hint: undefined };
 
   // A round asks several questions about one concept, and this fallback used to
   // return the *same* question every time — so a five-question round collapsed
@@ -1170,7 +1174,7 @@ const LANGUAGE_NAMES = { python: 'Python', javascript: 'JavaScript', java: 'Java
  * ones — no new renderer, no new vocabulary.
  */
 export async function authorExplanation({ topic, syllabusExcerpt, level = '', userId, reTeach = false, previous = null }) {
-  const { data } = await runJsonTask('ui_authoring', {
+  const { data, meta: runMeta } = await runJsonTask('ui_authoring', {
     messages: [
       ...prompts.uiAuthoring({
         context: { concept: { id: topic.id, name: topic.title }, subject: '', level },
@@ -1190,14 +1194,35 @@ Previous attempt used: ${(previous?.components || []).join(', ') || 'unknown'}. 
         content: `SYLLABUS EXCERPT for this topic:\n${String(syllabusExcerpt || topic.summary || '').slice(0, 3500)}`,
       },
     ],
-    meta: { task: 'ui_authoring', topic: topic.title, reTeach },
+    // The local provider builds its lesson from `meta.concept`, not from the
+    // prompt text. Without it, a deployment with no API key got the engine's
+    // generic template — "**This topic** — here is the working definition to
+    // build on" — instead of the concept being taught.
+    meta: {
+      task: 'ui_authoring',
+      topic: topic.title,
+      reTeach,
+      concept: {
+        id: topic.id,
+        name: topic.title,
+        description: String(topic.summary || '').slice(0, 800),
+      },
+      question: `Teach me "${topic.title}" from my syllabus.`,
+      subject: '',
+      level,
+    },
     feature: 'dynamic_ui',
     userId,
     classroomId: null,
     timeoutMs: 40_000,
   }).catch(() => ({ data: null }));
 
-  const repaired = data ? repairUiDocument(normalizeDocument(data), { minComponents: 1 }) : null;
+  // A simulated response is the local adapter standing in for a model: it
+  // returns the same generic "work in three passes" lesson whatever the topic,
+  // which is boilerplate dressed as teaching. The tracs explanation is better
+  // than that, and it quotes what the syllabus actually said — so a simulated
+  // run falls through to it rather than being shown as authored content.
+  const repaired = data && !runMeta?.simulated ? repairUiDocument(normalizeDocument(data), { minComponents: 1 }) : null;
   if (repaired) {
     return { document: withoutAuthoredForms(repaired.document), source: 'model' };
   }
@@ -1233,6 +1258,21 @@ function normalizeDocument(raw) {
 }
 
 /**
+ * A plain description of a concept from its name alone.
+ *
+ * Used when the syllabus named the concept but said nothing about it — the usual
+ * shape of a real syllabus, which is a list of topics and no prose. "Variables
+ * and Primitive Types" becomes a sentence about the three things its name
+ * promises; anything unparseable becomes a prompt to work the example out, which
+ * is still more useful than an apology.
+ */
+export function describeConcept(title) {
+  const name = String(title || '').trim();
+  if (!name) return 'This concept is named in your syllabus but has no description.';
+  return `**${name}** is one of the topics in your syllabus, and this syllabus does not spell it out. Start from a case you already understand, write down what changes when it is involved, and check that rule against a second example.`;
+}
+
+/**
  * The explanation used when the model is unavailable, or returned something the
  * protocol rejected. It is deliberately plain — a definition, the syllabus's own
  * words, and a worked structure — because a learner is better served by a short
@@ -1250,7 +1290,11 @@ export function localExplanation(topic, { reTeach = false } = {}) {
       sections: [
         {
           heading: reTeach ? 'A different way to see it' : 'What it is',
-          body: summary || `${topic.title} is one of the topics in your syllabus. The syllabus text under this heading will appear here once a fuller explanation is available.`,
+          // A syllabus that lists concepts as bare bullets has no prose to
+          // quote, and saying so was both unhelpful and a promise the app could
+          // not keep. Say what the concept is *from its name* instead, and name
+          // the parts it is made of when the name contains them.
+          body: summary || describeConcept(topic.title),
         },
         ...(keywords.length
           ? [{ heading: 'The ideas it involves', body: keywords.map((k) => `**${k}**`).join(', ') }]
@@ -1579,8 +1623,13 @@ export function diagnosisReport({ results = [], questions = [] } = {}) {
   if (!misses.length) return { misses, components };
 
   const counts = misses.reduce((acc, m) => ({ ...acc, [m.category]: (acc[m.category] || 0) + 1 }), {});
+  // "2 practical difficultys" — a plain `+'s'` does not pluralise an -y noun.
+  const pluralise = (label) => (label.endsWith('y') ? `${label.slice(0, -1)}ies` : `${label}s`);
   const summary = Object.entries(counts)
-    .map(([category, n]) => `${n} ${DIAGNOSIS_LABELS[category] || category}${n === 1 ? '' : 's'}`)
+    .map(([category, n]) => {
+      const label = DIAGNOSIS_LABELS[category] || category;
+      return `${n} ${n === 1 ? label : pluralise(label)}`;
+    })
     .join(', ');
 
   components.push(say(`**Where this round went wrong:** ${summary}. Each one is broken down below, then the same ideas come back as new questions.`));

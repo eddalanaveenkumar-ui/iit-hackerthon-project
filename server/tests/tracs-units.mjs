@@ -29,6 +29,7 @@ import {
   diagnoseMistake,
   diagnosisReport,
   localQuestion,
+  localExplanation,
   authorRound,
   testRoundForm,
   DIAGNOSIS_LABELS,
@@ -207,6 +208,88 @@ console.log('\nThe local fallback can fill a round on its own');
   }
   check('seven variants of one concept are distinct', seen.size >= 5, `${seen.size} distinct`);
   check('and they all ask something', [...seen].every((q) => q.includes('?') || q.includes('.')), JSON.stringify([...seen].slice(0, 2)));
+}
+
+/* -------------------------------------------------------------------------- */
+console.log('\nA round is asked once, and never in boilerplate');
+
+{
+  // Every question in a round must have its own id. Authoring runs in parallel,
+  // so ids built from the clock collided: two questions from different concepts
+  // shared an id, grading matched both answers to the first one found, and the
+  // report listed each miss twice.
+  const concept = { id: 't1', title: 'Variables store values', summary: '' };
+  const other = { id: 't2', title: 'Loops repeat a block', summary: '' };
+  const ids = [];
+  for (const topic of [concept, other]) {
+    for (let variant = 0; variant < 6; variant += 1) ids.push(localQuestion(topic, { variant }).id);
+  }
+  equal('twelve questions get twelve distinct ids', new Set(ids).size, ids.length);
+
+  // And a report is one entry per miss, not one per answer.
+  const questions = [
+    { id: 'q1', type: 'radio', question: 'First?', options: ['A', 'B'], correct_index: 1 },
+    { id: 'q2', type: 'radio', question: 'Second?', options: ['C', 'D'], correct_index: 1 },
+  ];
+  const results = [
+    { question_id: 'q1', verdict: 'incorrect', answer: 'A' },
+    { question_id: 'q2', verdict: 'incorrect', answer: 'C' },
+  ];
+  const report = diagnosisReport({ results, questions });
+  equal('two misses are reported once each', report.misses.length, 2);
+  equal('and named separately', new Set(report.misses.map((m) => m.question)).size, 2);
+
+  // The category counts read as English.
+  const mixed = diagnosisReport({
+    results: [
+      { question_id: 'q1', verdict: 'incorrect', answer: 'not code' },
+      { question_id: 'q2', verdict: 'incorrect', answer: 'nope' },
+    ],
+    questions: [
+      { id: 'q1', type: 'code_input', question: 'Write it', language: 'python' },
+      { id: 'q2', type: 'code_input', question: 'Write it again', language: 'python' },
+    ],
+  });
+  const heading = mixed.components.map((c) => String(c.content)).join(' ');
+  // Both entries above are practical difficulties, so the plural is required —
+  // asserting only "no difficultys" passed even with the naive `+'s'`.
+  check('two practical difficulties are pluralised', /2 practical difficulties/.test(heading), heading.slice(0, 160));
+  check('and never as "difficultys"', !/difficultys/.test(heading), heading.slice(0, 160));
+}
+
+{
+  // A concept the syllabus named but did not describe still gets an explanation
+  // rather than a placeholder promising one "once available".
+  const explained = localExplanation({ id: 't1', title: 'Conditionals', summary: '' });
+  const body = JSON.stringify(explained.components);
+  check('an undescribed concept is still described', !/will appear here once/i.test(body), body.slice(0, 200));
+  check('and is named in its own explanation', /Conditionals/.test(body), body.slice(0, 200));
+  check('a described concept quotes the syllabus', /Quotes the rule/.test(JSON.stringify(localExplanation({ id: 't1', title: 'Conditionals', summary: 'Quotes the rule when the condition is false.' }).components)));
+}
+
+/* -------------------------------------------------------------------------- */
+console.log('\nEvery round the engine asks for survives its own protocol');
+
+{
+  // The protocol caps a `question_form` at UI_LIMITS.maxQuestions, and
+  // `makeDocument` drops a component that fails validation *silently*. The cap
+  // was 12 while a round grows to 15, so those rounds reached the learner as a
+  // one-line header with no questions under it — the whole test vanished.
+  const { parseComponent } = await import('../src/modules/ai/ui/protocol.js');
+  const concept = { id: 't1', title: 'Variables', summary: '' };
+
+  for (const count of [5, 12, 13, 15]) {
+    const questions = Array.from({ length: count }, (_, i) => ({
+      ...localQuestion(concept, { variant: i % 7 }),
+      topicId: concept.id,
+    }));
+    const form = testRoundForm({ questions, topic: { title: 'Python Basics' }, sessionId: 'round' });
+    check(`a ${count}-question round is a valid component`, parseComponent(form).ok === true, JSON.stringify(parseComponent(form).issues || []).slice(0, 120));
+  }
+
+  // And the round size the engine actually produces never exceeds it.
+  const tooMany = Array.from({ length: 16 }, (_, i) => ({ ...localQuestion(concept, { variant: i % 7 }), topicId: concept.id }));
+  check('sixteen is refused', parseComponent(testRoundForm({ questions: tooMany, topic: { title: 'X' }, sessionId: 'r' })).ok === false);
 }
 
 /* -------------------------------------------------------------------------- */

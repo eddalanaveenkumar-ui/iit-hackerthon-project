@@ -41,7 +41,12 @@ export const UI_LIMITS = Object.freeze({
   maxText: 12_000,
   maxShortText: 400,
   maxItems: 20,
-  maxQuestions: 12,
+  // A tracs round is 5-15 questions submitted together. This capped at 12, and
+  // `makeDocument` drops any component that fails validation without saying so —
+  // so every round longer than twelve questions reached the learner as a line of
+  // text with no questions under it. The web renderer had the same 12; both are
+  // 15 now, and the engine never asks for more than fifteen.
+  maxQuestions: 15,
   maxQuizQuestions: 8,
   maxOptions: 12,
   maxTableRows: 60,
