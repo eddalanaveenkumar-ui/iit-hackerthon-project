@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { runPython, pythonRuntimeDisabled } from './python-interpreter.js';
 
 /**
  * Secure code execution.
@@ -15,9 +16,12 @@ import crypto from 'node:crypto';
  *  - runs with an empty environment (no secrets leak into the child)
  *  - has a hard wall-clock timeout and capped stdout/stderr
  *
- * JavaScript runs in the sandbox. Python uses an isolated interpreter when
- * available. Java/SQL are analysed statically only, and the API says so
- * explicitly rather than pretending to run them.
+ * JavaScript runs in the sandbox. Python runs too, on every host: a native
+ * `python3` when the machine has one, and otherwise CPython compiled to
+ * WebAssembly inside a worker thread (`python-worker.js`) — which is what makes
+ * it work on a serverless Node image with no interpreter installed. Java/SQL are
+ * analysed statically only, and the API says so explicitly rather than
+ * pretending to run them.
  */
 
 const TIME_LIMIT_MS = Number(process.env.SANDBOX_TIMEOUT_MS || 5000);
@@ -284,10 +288,30 @@ export async function executeCode({ code, language = 'javascript', tests = [], m
     };
   }
 
-  // Refuse to run rather than run-and-fail: a missing interpreter is reported
-  // as "not executed", which every caller treats as not-graded, so the student
-  // is never told their correct program was wrong.
-  if (language === 'python' && !(await isRuntimeAvailable('python'))) {
+  // Python on a host with no `python3` is no longer a dead end.
+  //
+  // This used to refuse outright — "This server has no Python interpreter
+  // installed" — which was accurate on a Node-only serverless image and useless
+  // to the learner, who had written a correct program and was told it could not
+  // be checked. We now run CPython in a worker thread via Pyodide, so the
+  // submission executes even though the host has no interpreter. Only if *that*
+  // also cannot start do we fall back to saying so.
+  //
+  // Which engine runs Python is decided by `LM_PYTHON_ENGINE`:
+  //   auto   (default) a native `python3` when the host has one, else the
+  //          in-process wasm interpreter
+  //   native only `python3`; if it is missing, report that honestly
+  //   wasm   always the in-process interpreter — for hosts where spawning a
+  //          child process is not allowed, and for testing this path on a box
+  //          that does have Python
+  const pythonEngine = String(process.env.LM_PYTHON_ENGINE || 'auto').toLowerCase();
+  const useWasmPython = language === 'python' && (
+    pythonRuntimeDisabled()
+    || pythonEngine === 'wasm'
+    || (pythonEngine !== 'native' && !(await isRuntimeAvailable('python')))
+  );
+  if (useWasmPython && pythonRuntimeDisabled()) {
+    // An explicit switch, used by the tests that cover the no-runtime path.
     return {
       executed: false,
       runtime: 'python3 (unavailable)',
@@ -359,6 +383,91 @@ export async function executeCode({ code, language = 'javascript', tests = [], m
         results,
         stdout: (parsed.logs || []).join('\n').slice(0, MAX_OUTPUT),
         loadError: parsed.loadError || null,
+        timedOut: false,
+        staticAnalysis: staticInfo,
+      };
+    }
+
+    // Python without a system interpreter: CPython in a worker thread (Pyodide).
+    // Same contract as the native path below — the program's output, or the
+    // traceback, and a real timeout enforced by terminating the worker.
+    if (language === 'python' && useWasmPython) {
+      const run = await runPython(code, { timeoutMs: TIME_LIMIT_MS });
+      if (!run.available) {
+        return {
+          executed: false,
+          runtime: 'python (in-process runtime unavailable)',
+          reason: 'No Python interpreter is available on this server right now, so the submission could not be run. It was analysed statically instead.',
+          results: [],
+          stdout: '',
+          loadError: null,
+          timedOut: false,
+          runtimeUnavailable: true,
+          staticAnalysis: staticInfo,
+        };
+      }
+      if (run.timedOut) {
+        return { executed: true, runtime: 'python (isolated wasm)', results: [], stdout: '', loadError: null, timedOut: true, staticAnalysis: staticInfo };
+      }
+      // `mode` defaults to 'tests', but with no tests there is nothing to call
+      // `solve()` with — the Run button sends exactly that, so treating it as a
+      // tests run produced an empty screen. No tests means "just run it".
+      if (mode === 'run' || tests.length === 0) {
+        return {
+          executed: true,
+          runtime: 'python (isolated wasm)',
+          results: [],
+          stdout: String(run.stdout || '').slice(0, MAX_OUTPUT),
+          loadError: run.error ? String(run.error).slice(0, 1500) : null,
+          timedOut: false,
+          staticAnalysis: staticInfo,
+        };
+      }
+      // Tests mode: run the program (which defines solve), then call solve for
+      // each case inside the same interpreter, so the fixture matches the
+      // native harness's @@RESULT@@ contract exactly.
+      const callArgs = JSON.stringify(tests.map((t) => ({ id: t.id, args: t.args ?? [] })));
+      const harness = `${code}
+
+import json as __lm_json
+__lm_out = []
+for __lm_t in __lm_json.loads(${JSON.stringify(callArgs)}):
+    try:
+        __lm_v = solve(*__lm_t.get('args', []))
+        __lm_out.append({'id': __lm_t['id'], 'passed': True, 'output': __lm_json.dumps(__lm_v)})
+    except Exception as __lm_e:
+        __lm_out.append({'id': __lm_t['id'], 'passed': False, 'output': '', 'error': f'{type(__lm_e).__name__}: {__lm_e}'})
+print('@@RESULT@@' + __lm_json.dumps({'results': __lm_out}))
+`;
+      const testRun = await runPython(harness, { timeoutMs: TIME_LIMIT_MS });
+      if (testRun.timedOut) {
+        return { executed: true, runtime: 'python (isolated wasm)', results: tests.map((t) => ({ id: t.id, passed: false, output: '', error: 'Execution timed out' })), stdout: '', loadError: null, timedOut: true, staticAnalysis: staticInfo };
+      }
+      const raw = String(testRun.stdout || '');
+      const resultMarker = raw.indexOf('@@RESULT@@');
+      if (resultMarker === -1) {
+        return {
+          executed: true,
+          runtime: 'python (isolated wasm)',
+          results: [],
+          stdout: raw.slice(0, 2000),
+          loadError: (testRun.error || 'Python sandbox produced no result').slice(0, 1500),
+          timedOut: false,
+          staticAnalysis: staticInfo,
+        };
+      }
+      let parsed = { results: [] };
+      try {
+        parsed = JSON.parse(raw.slice(resultMarker + '@@RESULT@@'.length));
+      } catch {
+        parsed = { results: [] };
+      }
+      return {
+        executed: true,
+        runtime: 'python (isolated wasm)',
+        results: parsed.results || [],
+        stdout: '',
+        loadError: null,
         timedOut: false,
         staticAnalysis: staticInfo,
       };

@@ -19,7 +19,8 @@
     "test:tracs-live": "node tests/run-tracs-live.mjs",
     "test:admin": "node tests/admin-account.mjs",
     "test:units": "node tests/tracs-units.mjs",
-    "test:adaptive": "node tests/tracs-adaptive.mjs"
+    "test:adaptive": "node tests/tracs-adaptive.mjs",
+    "test:python": "node tests/python-runtime.mjs"
   },
   "dependencies": {
     "@lossless.org/nosqldb": "^11.0.0",
@@ -34,6 +35,7 @@
     "mongodb": "^7.8.0",
     "multer": "^2.5.0",
     "pdfjs-dist": "^6.5.438",
+    "pyodide": "^314.0.8",
     "zod": "^4.6.7"
   },
   "devDependencies": {
