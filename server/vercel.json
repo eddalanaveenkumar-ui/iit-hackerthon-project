@@ -11,7 +11,7 @@
     "api/index.js": {
       "maxDuration": 120,
       "memory": 1024,
-      "includeFiles": "src/**,node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs"
+      "includeFiles": "src/**,node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs,node_modules/pyodide/**"
     }
   },
   "headers": [

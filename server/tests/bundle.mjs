@@ -93,5 +93,34 @@ check('the engine never loads the worker through a variable', () => {
   );
 });
 
+// The Python interpreter is a deploy-time asset the same way the pdfjs worker
+// is: a 9 MB wasm binary and a 2.5 MB stdlib zip that a bundler will not trace
+// from `import 'pyodide'`. If they are missing at runtime, every Python
+// submission quietly falls back to "could not be run" — the bug this whole
+// change exists to fix, restored by a deploy detail.
+check('the Python runtime is a declared dependency', () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(serverDir, 'package.json'), 'utf8'));
+  assert.ok(pkg.dependencies?.pyodide, 'pyodide must be a runtime dependency, not a devDependency');
+});
+
+check('vercel.json ships the interpreter wasm and stdlib', () => {
+  const cfg = JSON.parse(fs.readFileSync(path.join(serverDir, 'vercel.json'), 'utf8'));
+  const include = cfg.functions?.['api/index.js']?.includeFiles || '';
+  assert.match(include, /node_modules\/pyodide/, 'includeFiles must pin node_modules/pyodide/**');
+});
+
+check('the worker loads the interpreter through a literal specifier', () => {
+  const src = fs.readFileSync(path.join(serverDir, 'src/utils/python-worker.js'), 'utf8');
+  // Same rule as the pdfjs worker: a variable specifier cannot be traced.
+  assert.match(src, /from\s+['"]pyodide['"]/, 'pyodide must be imported by literal name');
+});
+
+check('the worker module exists where the parent expects it', () => {
+  assert.ok(
+    fs.existsSync(path.join(serverDir, 'src/utils/python-worker.js')),
+    'python-interpreter.js resolves ./python-worker.js — it must exist',
+  );
+});
+
 console.log(`\n${pass} passed, ${fails.length} failed\n`);
 if (fails.length) process.exitCode = 1;
